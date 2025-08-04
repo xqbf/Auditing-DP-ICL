@@ -180,7 +180,7 @@ class DPICLForGeneration:
         mean_embedding = np.mean(embeddings, axis=0)
         
         # 灵敏度为 1/N，其中 N 是子集数量（即句子数量），因为每个嵌入的l2范数为1 。
-        sensitivity = 1.0 / len(sentences)
+        sensitivity = 2.0 / len(sentences)
         sigma = (sensitivity * math.sqrt(2 * math.log(1.25 / self.delta))) / self.epsilon
         
         noisy_mean_embedding = mean_embedding + np.random.normal(0, sigma, mean_embedding.shape)
@@ -306,7 +306,7 @@ if __name__ == '__main__':
     # --- 文本分类任务示例 ---
     print("="*20 + " 文本分类任务示例 " + "="*20)
     subset_data = data[:100]  # 仅使用前100条数据进行测试
-    classification_exemplars = [subset_data[i][2] for i in range(1, 10)]
+    classification_exemplars = [subset_data[i][2] for i in range(0, 40)]
     query_classify = subset_data[0][2]
     
     dp_classifier = DPICLForClassification(
@@ -317,19 +317,19 @@ if __name__ == '__main__':
     )
     
     T = 1000
-    private_result_classify = dp_classifier(
-        exemplars=classification_exemplars,
-        query_str=query_classify,
-        num_subsets=1
-    )
-    print(f"查询: {query_classify}")
-    print(f"经过DP-ICL保护的分类结果: {private_result_classify}\n")
+    # private_result_classify = dp_classifier(
+    #     exemplars=classification_exemplars,
+    #     query_str=query_classify,
+    #     num_subsets=20
+    # )
+    # print(f"查询: {query_classify}")
+    # print(f"经过DP-ICL保护的分类结果: {private_result_classify}\n")
     count = 0
     for _ in range(T):
         private_result_classify = dp_classifier(
             exemplars=classification_exemplars,
             query_str=query_classify,
-            num_subsets=1
+            num_subsets=10
         )
         # print(f"查询: {query_classify}")
         # print(f"经过DP-ICL保护的分类结果: {private_result_classify}\n")
@@ -338,30 +338,30 @@ if __name__ == '__main__':
     print(f"经过DP-ICL保护的分类结果为 True 的比例: {count / T:.2f}\n")
 
 
-    classification_exemplars = [subset_data[i][2] for i in range(1, 2)]
+    classification_exemplars = [subset_data[i][2] for i in range(1, 41)]
     query_classify = subset_data[0][2]
     
     dp_classifier = DPICLForClassification(
         llm_callable=mock_llm_classifier,
         class_labels=["True", "False"],
-        epsilon=20.0,
+        epsilon=1.0,
         delta=1e-3
     )
     
     T = 1000
-    private_result_classify = dp_classifier(
-        exemplars=classification_exemplars,
-        query_str=query_classify,
-        num_subsets=1
-    )
-    print(f"查询: {query_classify}")
-    print(f"经过DP-ICL保护的分类结果: {private_result_classify}\n")
+    # private_result_classify = dp_classifier(
+    #     exemplars=classification_exemplars,
+    #     query_str=query_classify,
+    #     num_subsets=20
+    # )
+    # print(f"查询: {query_classify}")
+    # print(f"经过DP-ICL保护的分类结果: {private_result_classify}\n")
     count_2 = 0
     for _ in range(T):
         private_result_classify = dp_classifier(
             exemplars=classification_exemplars,
             query_str=query_classify,
-            num_subsets=1
+            num_subsets=10
         )
         # print(f"查询: {query_classify}")
         # print(f"经过DP-ICL保护的分类结果: {private_result_classify}\n")
@@ -369,7 +369,7 @@ if __name__ == '__main__':
             count_2 += 1
     print(f"经过DP-ICL保护的分类结果为 True 的比例: {count_2 / T:.2f}\n")
 
-    lower, upper = clopper_pearson(count,count_2, T, a=0.95)
+    lower, upper = clopper_pearson(count,count_2, T, a=0.99)
     print(f"Clopper-Pearson 置信区间下界: {lower:.4f}")
     print(f"Clopper-Pearson 置信区间上界: {upper:.4f}") 
     eps = math.log(upper/lower)
