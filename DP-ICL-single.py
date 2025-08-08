@@ -2,6 +2,7 @@ import numpy as np
 import math
 import csv
 import dspy
+import pdb
 from scipy.stats import beta
 
 # ==============================================================================
@@ -9,13 +10,13 @@ from scipy.stats import beta
 # ==============================================================================
 # As in your original code, configure the language models.
 # target_lm = dspy.LM(...) # You can use a different model for the main task if needed.
-# attack_lm = dspy.LM("together_ai/meta-llama/Llama-3-8b-chat-hf",
-#                      api_key="2f87bd2dace135491c98dd468ff09d757e30b0dbde9cfd091b2859020b9d0bc4", # Please replace with your actual API key
-#                      temperature=0.1)
-attack_lm = dspy.LM("ollama_chat/llama3.1:8b6k",
-                        api_key="sk-LGORY9rX516364f6fd78T3BLbKFJ0cD7f508E7aF41C0a769", 
-                        base_url="http://localhost:11434",
-                        temperature=0.1)
+attack_lm = dspy.LM("together_ai/meta-llama/Llama-3-8b-chat-hf",
+                     api_key="2f87bd2dace135491c98dd468ff09d757e30b0dbde9cfd091b2859020b9d0bc4", # Please replace with your actual API key
+                     temperature=0.1)
+# attack_lm = dspy.LM("ollama_chat/llama3.1:8b6k",
+#                         api_key="sk-LGORY9rX516364f6fd78T3BLbKFJ0cD7f508E7aF41C0a769", 
+#                         base_url="http://localhost:11434",
+#                         temperature=0.1)
 dspy.configure(lm=attack_lm)
 
 # Define the signature for the classification task based on the paper's format.
@@ -155,111 +156,118 @@ if __name__ == '__main__':
         print("Error: `ag_news_csv/test.csv` not found. Please ensure the dataset is in the correct path.")
         exit()
 
-    f.close()
-
-    f = open('output-single.txt', 'w',encoding = 'utf-8')
-    print("="*20 + " DP-ICL Classification & Privacy Audit " + "="*20,file = f)
-    # Class labels from the paper for AGNews 
-    class_map = {1: "World", 2: "Sports", 3: "Business", 4: "Sci/Tech"}
     
-    # --- Privacy Audit Parameters ---
-    # We will test if including a specific exemplar (target_record)
-    # leaks information about its true class.
-    target_record = "Real Madrid has signed a new football player."  # The record to include/exclude
-    base_exemplars_data = all_data[1:40] 
-    
-    query_article_text = target_record
-    query_article_true_label = "Business"
 
-    # Convert data into (text, label) tuples
-    target_exemplar = (query_article_text, query_article_true_label)
-    base_exemplars = [(rec[2], class_map[int(rec[0])]) for rec in base_exemplars_data]
+    with open('output-single.txt', 'w', encoding='utf-8') as f:
+        print("="*20 + " DP-ICL Classification & Privacy Audit " + "="*20,file = f)
+        # Class labels from the paper for AGNews 
+        class_map = {1: "World", 2: "Sports", 3: "Business", 4: "Sci/Tech"}
+        
+        # --- Privacy Audit Parameters ---
+        # We will test if including a specific exemplar (target_record)
+        # leaks information about its true class.
+        target_record = "Real Madrid has signed a new football player."  # The record to include/exclude
+        base_exemplars_data = all_data[1:40] 
+        
+        query_article_text = target_record
+        query_article_true_label = "Business"
 
-    # D: Dataset WITH the target record
-    exemplars_with_target = [target_exemplar] + base_exemplars
-    # D': Dataset WITHOUT the target record
-    exemplars_without_target = base_exemplars
+        # Convert data into (text, label) tuples
+        target_exemplar = (query_article_text, query_article_true_label)
+        base_exemplars = [(rec[2], class_map[int(rec[0])]) for rec in base_exemplars_data]
 
-    # --- DP-ICL Instantiation ---
-    dp_classifier = DPICLForClassification(
-        llm_callable=llm_classifier,
-        class_labels=list(class_map.values()),
-        epsilon=1.0,  # As used in the paper's experiments [cite: 233]
-        delta=1e-3    # A common delta value for DP
-    )
-    
-    # --- Run Audit Simulation ---
-    T = 10 # Number of trials for the audit. Increase for more stable results.
-    print(f"Running privacy audit with {T} trials for ε={dp_classifier.epsilon}...",file = f)
-    
-    # Experiment 1: Target record IS IN the context
-    print("\nRunning Experiment 1 (target record INCLUDED in exemplars)...",file = f)
-    count_with_target = 0
-    for i in range(T):
-        predicted_label, _ = dp_classifier(
-            exemplars=exemplars_with_target,
-            query_str=query_article_text,
-            num_subsets=15
+        # D: Dataset WITH the target record
+        exemplars_with_target = [target_exemplar] + base_exemplars
+        # D': Dataset WITHOUT the target record
+        exemplars_without_target = base_exemplars
+
+        # --- DP-ICL Instantiation ---
+        dp_classifier = DPICLForClassification(
+            llm_callable=llm_classifier,
+            class_labels=list(class_map.values()),
+            epsilon=1.0,  # As used in the paper's experiments [cite: 233]
+            delta=1e-3    # A common delta value for DP
         )
-        if predicted_label == query_article_true_label:
-            count_with_target += 1
-        print(f"  Trial {i+1}/{T}: Predicted '{predicted_label}'", end='\r',file = f)
+        
+        # --- Run Audit Simulation ---
+        T = 10 # Number of trials for the audit. Increase for more stable results.
+        print(f"Running privacy audit with {T} trials for ε={dp_classifier.epsilon}...",file = f)
+        
+        # Experiment 1: Target record IS IN the context
+        print("\nRunning Experiment 1 (target record INCLUDED in exemplars)...",file = f)
+        count_with_target = 0
+        for i in range(T):
+            predicted_label, _ = dp_classifier(
+                exemplars=exemplars_with_target,
+                query_str=query_article_text,
+                num_subsets=30
+            )
+            # pdb.set_trace()  # Debugging point to inspect the predicted label
+            if predicted_label == query_article_true_label:
+                count_with_target += 1
+            print(f"  Trial {i+1}/{T}: Predicted '{predicted_label}'", end='\r',file = f)
+            if(i%10 ==0):
+                f.flush()
 
-    # Experiment 2: Target record IS NOT IN the context
-    print("\n\nRunning Experiment 2 (target record EXCLUDED from exemplars)...",file = f)
-    count_without_target = 0
-    for i in range(T):
-        # We need to make sure the number of exemplars is consistent.
-        # Here we use a different set of 5+1 exemplars for a fair comparison.
-        # Or, we can proceed with a smaller set for D'. Let's do that for a direct test.
-        predicted_label, _ = dp_classifier(
-            exemplars=exemplars_without_target,
-            query_str=query_article_text,
-            num_subsets=15
-        )
-        if predicted_label == query_article_true_label:
-            count_without_target += 1
-        print(f"  Trial {i+1}/{T}: Predicted '{predicted_label}'", end='\r',file = f)
-    
-    print("\n\n--- Audit Results ---",file = f)
-    
-    # Calculate probabilities of correctly classifying the query article
-    prob_with_target = count_with_target / T
-    prob_without_target = count_without_target / T
+        # Experiment 2: Target record IS NOT IN the context
+        print("\n\nRunning Experiment 2 (target record EXCLUDED from exemplars)...",file = f)
+        count_without_target = 0
+        for i in range(T):
+            # We need to make sure the number of exemplars is consistent.
+            # Here we use a different set of 5+1 exemplars for a fair comparison.
+            # Or, we can proceed with a smaller set for D'. Let's do that for a direct test.
+            predicted_label, _ = dp_classifier(
+                exemplars=exemplars_without_target,
+                query_str=query_article_text,
+                num_subsets=30
+            )
+            if predicted_label == query_article_true_label:
+                count_without_target += 1
+            print(f"  Trial {i+1}/{T}: Predicted '{predicted_label}'", end='\r',file = f)
+            if(i%10 ==0):
+                f.flush()
+            # f.flush()
+        
+        print("\n\n--- Audit Results ---",file = f)
+        
+        # Calculate probabilities of correctly classifying the query article
+        prob_with_target = count_with_target / T
+        prob_without_target = count_without_target / T
 
-    print(f"Query Article True Label: '{query_article_true_label}'",file = f)
-    print(f"P(Correct Prediction | With Target)  = {prob_with_target:.4f} ({count_with_target}/{T})",file = f)
-    print(f"P(Correct Prediction | Without Target)= {prob_without_target:.4f} ({count_without_target}/{T})",file = f)
+        print(f"Query Article True Label: '{query_article_true_label}'",file = f)
+        print(f"P(Correct Prediction | With Target)  = {prob_with_target:.4f} ({count_with_target}/{T})",file = f)
+        print(f"P(Correct Prediction | Without Target)= {prob_without_target:.4f} ({count_without_target}/{T})",file = f)
 
-    # --- Empirical Epsilon Calculation ---
-    # We calculate the confidence interval for each probability to get a more robust
-    # estimate of the privacy loss.
-    confidence = 0.95
-    p_with_target_interval = clopper_pearson(count_with_target, T, confidence)
-    p_without_target_interval = clopper_pearson(count_without_target, T, confidence)
-    
-    TPR = count_with_target / T
-    FPR = count_without_target / T
-    print(f"\nEmpirical True Positive Rate (TPR): {TPR:.4f}", file = f)
-    print(f"Empirical False Positive Rate (FPR): {FPR:.4f}", file = f)
-    print(f"\nEmpirical eps : {math.log(TPR/FPR):.4f}",file = f)
+        # --- Empirical Epsilon Calculation ---
+        # We calculate the confidence interval for each probability to get a more robust
+        # estimate of the privacy loss.
+        confidence = 0.95
+        p_with_target_interval = clopper_pearson(count_with_target, T, confidence)
+        p_without_target_interval = clopper_pearson(count_without_target, T, confidence)
+        
+        TPR = count_with_target / T
+        FPR = count_without_target / T
+        print(f"\nEmpirical True Positive Rate (TPR): {TPR:.4f}", file = f)
+        print(f"Empirical False Positive Rate (FPR): {FPR:.4f}", file = f)
+        print(f"\nEmpirical eps : {math.log(TPR/FPR):.4f}",file = f)
 
 
-    print(f"\n{confidence*100}% CI for P(With Target):   ({p_with_target_interval[0]:.4f}, {p_with_target_interval[1]:.4f})",file = f)
-    print(f"{confidence*100}% CI for P(Without Target): ({p_without_target_interval[0]:.4f}, {p_without_target_interval[1]:.4f})",file = f)
-    
-    # The empirical epsilon is the log of the ratio of probabilities.
-    # To find the worst-case, we take the upper bound of the "with target" prob
-    # and the lower bound of the "without target" prob.
-    # log( Pr(E|D) / Pr(E|D') ) <= epsilon
-    lower_p1 = p_with_target_interval[0]
-    upper_p2 = p_without_target_interval[1]
+        print(f"\n{confidence*100}% CI for P(With Target):   ({p_with_target_interval[0]:.4f}, {p_with_target_interval[1]:.4f})",file = f)
+        print(f"{confidence*100}% CI for P(Without Target): ({p_without_target_interval[0]:.4f}, {p_without_target_interval[1]:.4f})",file = f)
+        
+        # The empirical epsilon is the log of the ratio of probabilities.
+        # To find the worst-case, we take the upper bound of the "with target" prob
+        # and the lower bound of the "without target" prob.
+        # log( Pr(E|D) / Pr(E|D') ) <= epsilon
+        lower_p1 = p_with_target_interval[0]
+        upper_p2 = p_without_target_interval[1]
 
-    if upper_p2 > 0:
-        empirical_epsilon = math.log(lower_p1 / upper_p2)
-        print(f"\nEmpirically Estimated Epsilon (lower_bound): {empirical_epsilon:.4f}", file = f)
-    else:
-        print("\nCould not compute empirical epsilon because the lower bound of P(Without Target) is 0.",file = f)
+        if upper_p2 > 0:
+            empirical_epsilon = math.log(lower_p1 / upper_p2)
+            print(f"\nEmpirically Estimated Epsilon (lower_bound): {empirical_epsilon:.4f}", file = f)
+        else:
+            print("\nCould not compute empirical epsilon because the lower bound of P(Without Target) is 0.",file = f)
 
-    print("\nNote: A lower empirical epsilon suggests better privacy protection. " \
-          "If it's close to the theoretical epsilon you set, the mechanism is behaving as expected.",file = f)
+        print("\nNote: A lower empirical epsilon suggests better privacy protection. " \
+            "If it's close to the theoretical epsilon you set, the mechanism is behaving as expected.",file = f)
+        
