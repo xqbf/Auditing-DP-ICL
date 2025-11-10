@@ -3,9 +3,9 @@ import math
 import csv
 from scipy.stats import beta, norm
 import torch
+import sys
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 import random
-import sys
 from tqdm import tqdm
 
 # ==============================================================================
@@ -89,7 +89,7 @@ Your response must be a single word: either 'Yes' or 'No'.
     return np.random.choice(valid_labels)
 
 # ==============================================================================
-# 3. DP-ICL Implementation for Auditing
+# 3. <<< REFACTORED: DP-ICL Implementation for Auditing >>>
 # ==============================================================================
 class DPICLForClassification:
     def __init__(self, llm_callable, class_labels: list, epsilon: float, delta: float):
@@ -103,6 +103,7 @@ class DPICLForClassification:
         self.sigma = (math.sqrt(2) * math.sqrt(2 * math.log(1.25 / self.delta))) / self.epsilon
 
     def _get_votes(self, exemplars: list[tuple[str, str]], query_str: str, num_subsets: int) -> list[str]:
+        """Private method to handle partitioning and LLM calls, returning votes."""
         shuffled_indices = np.random.permutation(len(exemplars))
         partition_indices = np.array_split(shuffled_indices, num_subsets)
         votes = []
@@ -115,6 +116,7 @@ class DPICLForClassification:
         return votes
 
     def get_clean_vote_vector(self, exemplars: list[tuple[str, str]], query_str: str, num_subsets: int) -> np.ndarray:
+        """Runs the mechanism and returns the pre-noise vote histogram for auditing."""
         votes = self._get_votes(exemplars, query_str, num_subsets)
         histogram = np.zeros(self.num_classes)
         for vote in votes:
@@ -122,8 +124,15 @@ class DPICLForClassification:
                 histogram[self.label_to_id[vote]] += 1
         return histogram
 
+    def __call__(self, exemplars: list[tuple[str, str]], query_str: str, num_subsets: int) -> tuple[str, np.ndarray]:
+        """Runs the full DP-ICL process, returning the noisy result."""
+        clean_histogram = self.get_clean_vote_vector(exemplars, query_str, num_subsets)
+        noisy_histogram = clean_histogram + np.random.normal(0, self.sigma, self.num_classes)
+        winner_index = np.argmax(noisy_histogram)
+        return (self.id_to_label[winner_index], noisy_histogram)
+
 # ==============================================================================
-# 4. <<< MODIFIED: Privacy Audit Helper Functions >>>
+# 4. Privacy Audit Helper Functions
 # ==============================================================================
 def clopper_pearson(successes, trials, confidence_level):
     if trials == 0: return (0.0, 1.0)
@@ -143,6 +152,7 @@ def gdp_to_eps(mu, delta):
         if delta_val > delta: min_eps = eps
         else: max_eps = eps
     return min_eps
+
 
 def collect_vote_vectors_for_resampling(dp_classifier, exemplars_with, exemplars_without, query, num_subsets, T_collect):
     """
@@ -255,18 +265,20 @@ def run_audit_with_fixed_threshold_and_fdp_calc(dp_classifier, histograms_with, 
 
 def procedure(output_filename, epsilon, num_subsets, all_data, llm_classifier):
     with open(output_filename, 'w', encoding='utf-8') as f:
-        print("="*20 + " DP-ICL Membership Inference f-DP Audit " + "="*20, file=f)
-            
+        print("="*20 + " Membership Inference f-DP Privacy Audit " + "="*20, file=f)
+        
+        # --- Define the new binary class labels ---
         class_labels = ["Yes", "No"]
-            
-        canary_record_text = all_data[0][2]
+        
+        # --- Define Adjacent Datasets for Membership Inference ---
+        canary_record_text = "At Microsoft Education, we believe every student deserves the opportunity to thrive. Make math accessible for learners with powerful, inclusive tools designed to unlock potential and build confidence to make math fun."
         canary_class_label = "Yes"
-        base_exemplars_data = all_data[1:31] 
-        base_exemplars = [(rec[2], "No") for rec in base_exemplars_data]
-
-        exemplars_with_target = [(canary_record_text, "Yes")] + base_exemplars
+        base_exemplars_data = all_data[1:31]
+        base_exemplars = [(record[2], "No") for record in base_exemplars_data]
         exemplars_without_target = base_exemplars
+        exemplars_with_target = [(canary_record_text, "Yes")] + base_exemplars
 
+        # --- DP-ICL Instantiation ---
         dp_classifier = DPICLForClassification(
             llm_callable=llm_classifier,
             class_labels=class_labels,
@@ -275,6 +287,9 @@ def procedure(output_filename, epsilon, num_subsets, all_data, llm_classifier):
         )
         print(f"Theoretical ε={dp_classifier.epsilon}, δ={dp_classifier.delta}", file=f)
 
+        # --- <<< MODIFIED: Execute Three-Stage Audit with Bootstrap >>> ---
+        
+        # Stage 1: Collect clean vote vectors to build empirical distributions
         collected_vectors_with, collected_vectors_without = collect_vote_vectors_for_resampling(
             dp_classifier=dp_classifier,
             exemplars_with=exemplars_with_target,
@@ -286,43 +301,45 @@ def procedure(output_filename, epsilon, num_subsets, all_data, llm_classifier):
         print(f"\n Number of Subsets (K): {num_subsets}", file=f)
         print(f"\nCollected {len(collected_vectors_with)} vectors for 'With Canary' empirical distribution.", file=f)
         print(f"Collected {len(collected_vectors_without)} vectors for 'Without Canary' empirical distribution.", file=f)
-            
-        for num_trials in [400000]: # 调整这个列表以进行更多的试验
+        
+        # Stage 2: Simulate by bootstrapping from the collected vectors
+        for num_trials in [50000,100000,200000]: # 调整这个列表以进行更多的试验
             T_simulation = num_trials
-            print(f"\n--- STAGE 2: Simulating {T_simulation} histograms from mean vectors ---")
+            print(f"\n--- STAGE 2: Simulating {T_simulation} histograms via bootstrap resampling ---")
             histograms_with = simulate_histograms_from_bootstrap(
                 collected_vectors_with, dp_classifier.sigma, dp_classifier.num_classes, T_simulation)
             histograms_without = simulate_histograms_from_bootstrap(
                 collected_vectors_without, dp_classifier.sigma, dp_classifier.num_classes, T_simulation)
 
-                # 调用新的、混合了两种方法逻辑的审计函数
+            # Stage 3: Run f-DP analysis (call remains the same)
             run_audit_with_fixed_threshold_and_fdp_calc(
                 dp_classifier=dp_classifier,
                 histograms_with=histograms_with,
                 histograms_without=histograms_without,
                 canary_class_label=canary_class_label,
                 f=f
-            )        
-            
-        print(f"\nAudit finished. Results saved to '{output_filename}'")
+            )
+        
+    print(f"\nMembership inference audit finished. Results saved to '{output_filename}'.")
+
+
+
 # ==============================================================================
-# 5. Main Execution Block
+# 5. <<< MODIFIED: Main Execution with Three-Stage Audit >>>
 # ==============================================================================
 if __name__ == '__main__':
     # set_seed(327)
     # --- Data and Task Setup ---
-    # 注意：您需要将此路径更改为数据集的实际本地路径
-    data_path = "/local/scratch/yxia327/data/ag_news_csv/test.csv"
     try:
-        with open(data_path, 'r', encoding='utf-8') as f:
+        with open("/local/scratch/yxia327/data/ag_news_csv/test.csv", 'r', encoding='utf-8') as f:
             all_data = [(r[0], r[1], r[2]) for r in csv.reader(f)][1:]
     except FileNotFoundError:
-        print(f"Error: `{data_path}` not found.")
+        print("Error: `ag_news_csv/test.csv` not found.")
         exit()
 
-    alfa = [2,4,6,8,10,12,14]
-    for run_id in range(1,2): # 5 repeticiones por configuración
+    for epsilon in [8.0]: # Puedes ajustar esta lista para múltiples valores de epsilon
+        alfa = [4]
         for num_subsets in alfa:
-            output_filename = f'experiment_results_api/DP-ICL-api-G-run{run_id}-subsets{num_subsets}.txt'
-            procedure(output_filename, num_subsets, all_data, llm_classifier)
-        
+            for run_id in range(1,6): # 5 repeticiones por configuración
+                output_filename = f'experiment_results_single/DP-ICL-single-trials-run{run_id}-subsets{num_subsets}-eps{epsilon}.txt'
+                procedure(output_filename, epsilon, num_subsets, all_data, llm_classifier)

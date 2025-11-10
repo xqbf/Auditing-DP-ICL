@@ -5,9 +5,9 @@
 #SBATCH --mem=2GB
 
 
-cd /local/scratch/yxia327/mia/MIA-ICL/text-generation/api
+cd /local/scratch/yxia327/mia/MIA-ICL/text-classification/single
 source /local/scratch/yxia327/venv/bin/activate
 
 # --- Modificación principal ---
 # Pasar ambos argumentos, RUN_ID y NUM_SUBSETS, al script de Python
-python DP-ICL-G-test.py 
+python DP-ICL-single-trec.py 
