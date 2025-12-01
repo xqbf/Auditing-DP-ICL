@@ -2,6 +2,8 @@
 
 This is the code repository for paper \textit{Tight and Practical Privacy Auditing for Differentially Private In-Context Learning}.
 
+Formalization coming soon.
+
 We have implemented auditing codes for both text classification and generation tasks. 
 
 # Implemented Algorithms
