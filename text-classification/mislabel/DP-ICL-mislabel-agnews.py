@@ -31,6 +31,7 @@ def set_seed(seed: int):
 # 1. Hugging Face Transformers Setup (model path is now configurable via args)
 # ==============================================================================
 DEFAULT_MODEL_PATH = "/local/scratch/yxia327/Meta-Llama-3-8B-Instruct-HF"
+DEFAULT_DATA_PATH = "/local/scratch/yxia327/data/ag_news_csv/test.csv"
 
 tokenizer = None
 model = None
@@ -363,6 +364,8 @@ def parse_args():
     # Requested: make these configurable, with defaults matching the original hardcoded values
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH,
                         help="Local Hugging Face model path (default: original hardcoded path).")
+    parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH,
+                        help="Path to AG News CSV file (default: original hardcoded path). NOTE: This script assumes AG News label mapping.")
     parser.add_argument("--num_subsets", type=int, nargs="+", default=[2, 4, 6, 8, 10, 12, 14],
                         help="List of num_subsets (K) values to run. Pass one value for a single run.")
     parser.add_argument("--T_collect", type=int, default=200,
@@ -389,12 +392,12 @@ if __name__ == "__main__":
     if args.seed != 0:
         set_seed(args.seed)
 
-    # Load AG News data (data path intentionally NOT parameterized as requested)
+    # Load AG News data (data path is configurable; script assumes AG News label mapping)
     try:
-        with open("/local/scratch/yxia327/data/ag_news_csv/test.csv", "r", encoding="utf-8") as f:
+        with open(args.data_path, "r", encoding="utf-8") as f:
             all_data = [(r[0], r[1], r[2]) for r in csv.reader(f)][1:]
     except FileNotFoundError:
-        print("Error: `ag_news_csv/test.csv` not found.")
+        print(f"Error: AG News CSV not found at: {args.data_path}")
         sys.exit(1)
 
     # Load model after parsing args, so model_path can be configured
