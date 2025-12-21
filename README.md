@@ -4,7 +4,7 @@ This is the code repository for paper \textit{Tight and Practical Privacy Auditi
 
 We have implemented auditing codes for both text classification and generation tasks. 
 
-# Implemented Algorithms
+# Implementations
 We here list the corresponding relationship between each folder and experiment we described in paper.
 |folder name|algorithm|
 | :----: | :----: |
