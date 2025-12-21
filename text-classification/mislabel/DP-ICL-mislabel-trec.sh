@@ -11,4 +11,4 @@ source /local/scratch/yxia327/venv/bin/activate
 
 # --- Modificación principal ---
 # Pasar ambos argumentos, RUN_ID y NUM_SUBSETS, al script de Python
-python DP-ICL-mislabel-trec-sample.py 
+python DP-ICL-mislabel-trec.py 
