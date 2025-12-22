@@ -1,21 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=vllm-exp
-#SBATCH --gres=gpu:1                  # <--- 修改 1: 这里改成你需要的 GPU 数量 (1)
+#SBATCH --gres=gpu:1                
 #SBATCH --mem=64GB
 #SBATCH --output=slurm_logs/vllm_exp_%j.out
 #SBATCH --error=slurm_logs/vllm_exp_%j.err
 
 # === 环境准备 ===
-# module load cuda/12.1             # 如果集群要手动 load 模块
-source /local/scratch/yxia327/venv/bin/activate   # 替换成你的虚拟环境路径
+source /local/scratch/yxia327/venv/bin/activate  
 
 # === 路径 ===
 MODEL_PATH=/local/scratch/yxia327/gpt-oss-20b
 CODE_PATH=/local/scratch/yxia327/mia/MIA-ICL/text-classification/mislabel
-LOG_DIR=$CODE_PATH/logs # 定义日志目录
+LOG_DIR=$CODE_PATH/logs 
 
 # === 准备工作 (自动创建日志目录) ===
-# 确保日志目录存在，避免 "No such file or directory" 错误
 mkdir -p $LOG_DIR
 mkdir -p slurm_logs
 
@@ -41,7 +39,7 @@ sleep 120   # 建议延长等待时间到 2 分钟
 
 cd $CODE_PATH
 echo "Running experiment..."
-python -u DP-ICL-mislabel-sample-gpt.py
+python -u DP-ICL-mislabel-agnews-gpt.py
 
 # === 实验结束，关掉 vLLM ===
 echo "Killing vLLM server (PID: $VLLM_PID)..."
