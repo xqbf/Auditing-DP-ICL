@@ -20,8 +20,8 @@ We here list the corresponding relationship between each folder and experiment w
 | :----: | :----: |
 |classification/mislabel|Mislabel mia baseline for text classification task|
 |classification/auditing|Both black-box access and white-box access for text classification task|
-|classification/utility|Utility test on AGnews dataset|
-|generation/combine|Both black-box access and white-box access for text generation task|
+|classification/utility|Utility test for text classification task on the AGnews dataset|
+|generation/auditing|Both black-box access and white-box access for text generation task|
 |generation/baseline|Both black-box baseline and white-box baseline for text generation task|
 |generation/utility|utility test for text generation task|
 
