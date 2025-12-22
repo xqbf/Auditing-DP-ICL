@@ -274,6 +274,7 @@ def procedure(
     all_texts: list[str],
     llm_classifier,
     *,
+    shots_per_subset: int = 2,
     T_collect: int,
     T_simulation: int,
     epsilons: list[float],
@@ -296,8 +297,10 @@ def procedure(
         class_labels = ["Yes", "No"]
 
         # --- Randomly sample data for the audit ---
-        num_base_exemplars = 2 * num_subsets
+        if shots_per_subset < 1:
+            raise ValueError(f"--shots_per_subset must be >= 1 (got {shots_per_subset}).")
 
+        num_base_exemplars = int(shots_per_subset) * int(num_subsets)
         if len(all_texts) <= num_base_exemplars:
             raise ValueError(
                 f"Not enough data to sample a canary and {num_base_exemplars} base exemplars "
@@ -418,6 +421,13 @@ if __name__ == '__main__':
         default=[4],
         help="K values (#subsets/partitions). Accepts one or more ints. Default matches original script: 4.",
     )
+
+    parser.add_argument(
+        "--shots_per_subset",
+        type=int,
+        default=2,
+        help="Number of base exemplars per subset (shots per subset). Total base exemplars = shots_per_subset * K. Default 2 matches original num_base_exemplars=2*K.",
+    )
     parser.add_argument(
         "--num_runs",
         type=int,
@@ -520,6 +530,7 @@ if __name__ == '__main__':
                 num_subsets=int(k),
                 all_texts=all_texts,
                 llm_classifier=llm_classifier,
+                shots_per_subset=int(args.shots_per_subset),
                 T_collect=int(args.T_collect),
                 T_simulation=int(args.T_simulation),
                 epsilons=[float(e) for e in args.epsilons],
