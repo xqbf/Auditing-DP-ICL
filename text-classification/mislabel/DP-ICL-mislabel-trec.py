@@ -400,7 +400,7 @@ def parse_args():
         "--epsilons",
         type=float,
         nargs="+",
-        default=[0.1, 1.0, 2.0, 4.0, 8.0],
+        default=[1.0, 2.0, 4.0, 8.0],
         help="List of epsilons to analyze in stage 2/3."
     )
     parser.add_argument(
@@ -418,7 +418,7 @@ def parse_args():
     parser.add_argument(
         "--output_prefix",
         type=str,
-        default="trec",
+        default="trec-run",
         help="Output filename prefix. Final name: {output_prefix}{run_id}-subsets{K}.txt"
     )
     parser.add_argument(
