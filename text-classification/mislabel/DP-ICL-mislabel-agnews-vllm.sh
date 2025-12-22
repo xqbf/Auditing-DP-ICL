@@ -51,7 +51,7 @@ EOF
 VENV_PATH="/local/scratch/yxia327/venv/bin/activate"
 MODEL_PATH="/local/scratch/yxia327/gpt-oss-20b"
 CODE_PATH="/local/scratch/yxia327/mia/MIA-ICL/text-classification/mislabel"
-PY_SCRIPT="DP-ICL-mislabel-agnews-gpt.py"
+PY_SCRIPT="DP-ICL-mislabel-agnews-vllm.py"
 
 HOST="0.0.0.0"
 PORT="8000"
