@@ -1,4 +1,4 @@
-# Auditing DP-ICL (Formalization coming soon.)
+# Auditing DP-ICL
 
 This is the code repository for paper Tight and Practical Privacy Auditing for Differentially Private In-Context Learning.
 
