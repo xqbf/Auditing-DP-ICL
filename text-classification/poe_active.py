@@ -182,17 +182,17 @@ def run_active_audit(noisy_with, noisy_without, n_llm, n_sample,
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(description="PoE Active Auditing (Bootstrap + Bernstein+MC Error)")
-    parser.add_argument("--model_path", type=str, default="/local/scratch/yxia327/Meta-Llama-3-8B-Instruct-HF")
-    parser.add_argument("--data_path", type=str, default="/local/scratch/yxia327/data/ag_news_csv/test.csv")
+    parser.add_argument("--model_path", type=str)
+    parser.add_argument("--data_path", type=str)
     parser.add_argument("--text_col", type=int, default=2)
     parser.add_argument("--no_header", action="store_true")
     parser.add_argument("--delimiter", type=str, default=",")
     parser.add_argument("--num_exemplars", type=int, default=8, help="J: number of experts")
-    parser.add_argument("--n_llm", type=int, default=2000, help="Number of clean snapshots")
-    parser.add_argument("--n_sample", type=int, default=400000, help="Bootstrap samples")
+    parser.add_argument("--n_llm", type=int, default=20000, help="Number of clean snapshots")
+    parser.add_argument("--n_sample", type=int, default=4000000, help="Bootstrap samples")
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
-    parser.add_argument("--gamma_clip", type=float, default=2.0, help="Log-prob clipping bound")
+    parser.add_argument("--gamma_clip", type=float, default=6.0, help="Log-prob clipping bound")
     parser.add_argument("--gamma_conf", type=float, default=0.05, help="Confidence failure probability")
     parser.add_argument("--output_dir", type=str, default="results_poe_active")
     parser.add_argument("--output_prefix", type=str, default="poe-active")
@@ -200,7 +200,7 @@ def main():
     parser.add_argument("--canary_mode", choices=["fixed", "random"], default="random")
     parser.add_argument("--canary_index", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--attack_mode", type=str, choices=["direct", "semantic_similarity"], default="semantic_similarity")
+    parser.add_argument("--attack_mode", type=str, choices=["direct", "semantic_similarity"], default="direct")
     args = parser.parse_args()
 
     auditing_utils.attack_mode = args.attack_mode
