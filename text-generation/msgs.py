@@ -232,7 +232,7 @@ def multi_restart_search(model, vocab, seed_sentences=None,
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(description="MSGS: Find maximally distant sentence pairs in embedding space.")
-    parser.add_argument("--embedding_model", type=str, default="/local/scratch/yxia327/bge-large-en-v1.5")
+    parser.add_argument("--embedding_model", type=str)
     parser.add_argument("--vocab_source", type=str, default="nltk")
     parser.add_argument("--max_vocab", type=int, default=20000)
     parser.add_argument("--max_outer_iters", type=int, default=1)
