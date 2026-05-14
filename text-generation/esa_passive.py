@@ -205,13 +205,13 @@ def run_passive_audit(esa, all_data, canary_index, canary_exemplar, canary_fact,
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(description="ESA Passive Auditing (Full Process)")
-    parser.add_argument("--model_path", type=str, default="/local/scratch/yxia327/Meta-Llama-3-8B-Instruct-HF")
-    parser.add_argument("--embedding_model", type=str, default="/local/scratch/yxia327/bge-large-en-v1.5")
-    parser.add_argument("--data_path", type=str, default="/local/scratch/yxia327/data/Samsum/train.csv")
+    parser.add_argument("--model_path", type=str)
+    parser.add_argument("--embedding_model", type=str)
+    parser.add_argument("--data_path", type=str)
     parser.add_argument("--dataset_type", type=str, default="samsum", choices=["samsum", "xsum"])
     parser.add_argument("--num_subsets", type=int, default=8)
     parser.add_argument("--shots_per_subset", type=int, default=1)
-    parser.add_argument("--n_trials", type=int, default=2000)
+    parser.add_argument("--n_trials", type=int, default=20000)
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--y1_target", type=str, default="mirana wifie overliking")

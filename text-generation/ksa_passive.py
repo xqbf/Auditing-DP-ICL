@@ -120,11 +120,11 @@ def run_passive_audit(all_texts, canary_text, canary_index, num_exemplars,
 
 def main():
     parser = argparse.ArgumentParser(description="KSA Passive Auditing (Full Process)")
-    parser.add_argument("--model_path", type=str, default="/local/scratch/yxia327/Meta-Llama-3-8B-Instruct-HF")
-    parser.add_argument("--data_path", type=str, default="/local/scratch/yxia327/data/Samsum/train.csv")
+    parser.add_argument("--model_path", type=str)
+    parser.add_argument("--data_path", type=str)
     parser.add_argument("--dataset_name", type=str, default="samsum", choices=["samsum", "xsum"])
     parser.add_argument("--num_exemplars", type=int, default=8)
-    parser.add_argument("--n_trials", type=int, default=2000)
+    parser.add_argument("--n_trials", type=int, default=20000)
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--output_dir", type=str, default="results_ksa_passive")
