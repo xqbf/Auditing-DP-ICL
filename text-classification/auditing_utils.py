@@ -195,6 +195,9 @@ def get_label_token_ids(class_labels: list[str]) -> list[int]:
     return [tokenizer.encode(label, add_special_tokens=False)[0] for label in class_labels]
 
 
+logit_temperature = 1.0
+
+
 def get_log_probs_for_labels(prompt: str, label_token_ids: list[int]) -> np.ndarray:
     """Get log-probabilities restricted to label tokens."""
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(model.device)
@@ -202,6 +205,8 @@ def get_log_probs_for_labels(prompt: str, label_token_ids: list[int]) -> np.ndar
         outputs = model(**inputs)
     logits = outputs.logits[0, -1, :]
     class_logits = torch.stack([logits[tid] for tid in label_token_ids])
+    if logit_temperature != 1.0:
+        class_logits = class_logits / logit_temperature
     class_log_probs = torch.log_softmax(class_logits, dim=-1)
     return class_log_probs.cpu().float().numpy()
 
@@ -277,26 +282,38 @@ def pure_dp_eps_lower_bound(alpha_upper: float, beta_upper: float, delta: float 
     return eps
 
 
-def empirical_bernstein_correction(sigma2, n_llm, n_sample, gamma=0.05):
+def empirical_bernstein_correction(sigma2, n_llm, n_sample, gamma=0.05,
+                                    snapshot_gamma_frac=0.5):
     """
     Compute the two-layer error correction Delta_b from Algorithm 2 of the paper.
 
-    Delta_b = sqrt(2 * sigma2 * log(8/gamma) / n_llm)
-            + 7 * log(8/gamma) / (3 * (n_llm - 1))
-            + sqrt(log(8/gamma) / (2 * n_sample))
+    The total failure probability gamma is split between the snapshot (Bernstein)
+    phase and the bootstrap (MC) phase via snapshot_gamma_frac:
+      - Snapshot phase gets gamma * snapshot_gamma_frac budget
+      - Bootstrap phase gets gamma * (1 - snapshot_gamma_frac) budget
+
+    Each phase has 4 union-bound events, so:
+      Bernstein log term = log(4 / (gamma * snapshot_gamma_frac))
+      MC log term        = log(4 / (gamma * (1 - snapshot_gamma_frac)))
+
+    When snapshot_gamma_frac=0.5 (default), both reduce to log(8/gamma).
 
     Args:
         sigma2: sample variance of h_b(X) across snapshots
         n_llm: number of clean LLM snapshots (e.g. 2000)
         n_sample: number of bootstrap Monte Carlo samples (e.g. 400000)
         gamma: total failure probability (default 0.05 for 95% confidence)
+        snapshot_gamma_frac: fraction of gamma allocated to snapshot phase
+                             (default 0.5 for equal split; >0.5 gives tighter
+                             snapshot bound at the cost of looser MC bound)
 
     Returns:
         Delta_b: the correction radius
     """
-    log_term = math.log(8.0 / gamma)
-    bernstein_term = math.sqrt(2.0 * sigma2 * log_term / n_llm) + 7.0 * log_term / (3.0 * (n_llm - 1))
-    mc_term = math.sqrt(log_term / (2.0 * n_sample))
+    log_snap = math.log(2.0 / (gamma * snapshot_gamma_frac))
+    log_mc = math.log(2.0 / (gamma * (1.0 - snapshot_gamma_frac)))
+    bernstein_term = math.sqrt(2.0 * sigma2 * log_snap / n_llm) + 7.0 * log_snap / (3.0 * (n_llm - 1))
+    mc_term = math.sqrt(log_mc / (2.0 * n_sample))
     return bernstein_term + mc_term
 
 

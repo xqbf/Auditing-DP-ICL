@@ -3,13 +3,8 @@ PV Active Auditing (Bootstrap).
 
 Stage 1: Collect n_llm clean vote vectors via real LLM calls (snapshot).
 Stage 2: Bootstrap n_sample noisy histograms by resampling + Gaussian noise.
-Stage 3: Compute TPR/FPR with two-layer error bound (Bernstein + MC Hoeffding),
+Stage 3: Compute TPR/FPR with Bernstein (snapshot) + Clopper-Pearson (MC),
          then convert to epsilon via GDP estimator.
-
-Error bound (Algorithm 2 from paper):
-  Delta_b = sqrt(2 * sigma_b^2 * log(8/gamma) / n_llm)
-          + 7 * log(8/gamma) / (3 * (n_llm - 1))
-          + sqrt(log(8/gamma) / (2 * n_sample))
 
 Usage:
     python pv_active.py --data_path /path/to/data.csv --epsilons 1 2 4 8 16
@@ -28,7 +23,7 @@ from scipy.stats import norm
 from auditing_utils import (
     load_hf_model, load_texts_from_csv, llm_yes_no,
     analytic_gauss_sigma, clopper_pearson, gdp_to_eps,
-    empirical_bernstein_correction, DEFENSE_PROMPTS,
+    DEFENSE_PROMPTS,
 )
 import auditing_utils
 
@@ -104,12 +99,12 @@ def bootstrap_simulate(collected_vectors, sigma, num_classes, n_sample):
 # Stage 3: Audit with two-layer error bound
 # ==============================================================================
 def run_active_audit(noisy_with, noisy_without, canary_class_id, n_llm, n_sample,
-                     delta, gamma, f):
+                     delta, gamma, f, snapshot_gamma_frac=0.5):
     """
     Compute epsilon lower bound using:
     - Black-box: fixed threshold at 0 (argmax = canary)
     - White-box: optimal threshold sweep on advantage score
-    Both use the two-layer Bernstein + MC error correction.
+    Both use Bernstein (snapshot) + Clopper-Pearson (MC) error correction.
     """
     T_audit = len(noisy_with)
 
@@ -124,24 +119,33 @@ def run_active_audit(noisy_with, noisy_without, canary_class_id, n_llm, n_sample
     scores_with = compute_scores(noisy_with)
     scores_without = compute_scores(noisy_without)
 
-    # --- Compute per-snapshot h_b variance for Bernstein ---
-    # For each unique clean vector in the snapshot, compute attack success probability
-    # Since PV output is nearly deterministic, variance is typically ~0
-    # We estimate it from the bootstrap: group by snapshot index isn't available,
-    # so we use the empirical observation that Var(h) ≈ 0 for PV (Table 2 in paper)
-    # For a conservative bound, we can compute variance of the score across snapshots
-    # But the correct approach is: h_b(x) = P(attack succeeds | clean output = x)
-    # Since all snapshots give same clean output, var_h = 0 for PV.
-    # We pass sigma2=0 and the Bernstein residual term handles it.
+    # --- Bernstein snapshot correction (no MC Hoeffding -- replaced by Clopper-Pearson) ---
     sigma2_with = 0.0  # PV: all snapshots produce identical output
     sigma2_without = 0.0
 
-    delta_1 = empirical_bernstein_correction(sigma2_with, n_llm, n_sample, gamma)
-    delta_0 = empirical_bernstein_correction(sigma2_without, n_llm, n_sample, gamma)
+    gamma_snap = gamma * snapshot_gamma_frac
+    gamma_mc = gamma * (1.0 - snapshot_gamma_frac)
+    log_snap = math.log(2.0 / gamma_snap)
 
-    print(f"\n--- Error Bounds (gamma={gamma}) ---", file=f)
-    print(f"  Bernstein+MC correction Delta_1 (TPR): {delta_1:.6f}", file=f)
-    print(f"  Bernstein+MC correction Delta_0 (FPR): {delta_0:.6f}", file=f)
+    bern_with = (math.sqrt(2.0 * sigma2_with * log_snap / n_llm)
+                 + 7.0 * log_snap / (3.0 * (n_llm - 1)))
+    bern_without = (math.sqrt(2.0 * sigma2_without * log_snap / n_llm)
+                    + 7.0 * log_snap / (3.0 * (n_llm - 1)))
+
+    cp_confidence = 1.0 - gamma_mc
+
+    print(f"\n--- Error Bounds (gamma={gamma}, snapshot_gamma_frac={snapshot_gamma_frac}) ---", file=f)
+    print(f"  Bernstein_1 (snapshot): {bern_with:.6f}", file=f)
+    print(f"  Bernstein_0 (snapshot): {bern_without:.6f}", file=f)
+    print(f"  Clopper-Pearson confidence: {cp_confidence}", file=f)
+
+    # Helper: compute TPR lower / FPR upper using CP + Bernstein
+    def get_tpr_low_fpr_up(tp_count, fp_count, n):
+        cp_tpr_lo, _ = clopper_pearson(tp_count, n, cp_confidence)
+        _, cp_fpr_hi = clopper_pearson(fp_count, n, cp_confidence)
+        tpr_low = max(0.0, cp_tpr_lo - bern_with)
+        fpr_up = min(1.0, cp_fpr_hi + bern_without)
+        return tpr_low, fpr_up
 
     # === Black-box (threshold at 0) ===
     tp_count = int(np.sum(scores_with > 0))
@@ -149,8 +153,7 @@ def run_active_audit(noisy_with, noisy_without, canary_class_id, n_llm, n_sample
     tpr_hat = tp_count / T_audit
     fpr_hat = fp_count / T_audit
 
-    tpr_low = max(0.0, tpr_hat - delta_1)
-    fpr_up = min(1.0, fpr_hat + delta_0)
+    tpr_low, fpr_up = get_tpr_low_fpr_up(tp_count, fp_count, T_audit)
 
     mu_bb = 0.0
     if 0 < fpr_up < 1 and 0 < (1 - tpr_low) < 1:
@@ -177,11 +180,9 @@ def run_active_audit(noisy_with, noisy_without, canary_class_id, n_llm, n_sample
     for threshold in candidate_thresholds:
         fp = T_audit - int(np.searchsorted(obs_without, threshold, side='right'))
         fn = int(np.searchsorted(obs_with, threshold, side='right'))
-        tpr_hat_t = 1.0 - fn / T_audit
-        fpr_hat_t = fp / T_audit
+        tp = T_audit - fn
 
-        tpr_low_t = max(0.0, tpr_hat_t - delta_1)
-        fpr_up_t = min(1.0, fpr_hat_t + delta_0)
+        tpr_low_t, fpr_up_t = get_tpr_low_fpr_up(tp, fp, T_audit)
 
         if not (0 < fpr_up_t < 1 and 0 < (1 - tpr_low_t) < 1):
             continue
@@ -193,8 +194,8 @@ def run_active_audit(noisy_with, noisy_without, canary_class_id, n_llm, n_sample
         if mu > max_mu:
             max_mu = mu
             best_threshold = threshold
-            best_tpr_hat = tpr_hat_t
-            best_fpr_hat = fpr_hat_t
+            best_tpr_hat = 1.0 - fn / T_audit
+            best_fpr_hat = fp / T_audit
 
     eps_wb = gdp_to_eps(max(max_mu, 0.0), delta) if max_mu > -float('inf') else 0.0
 
@@ -212,7 +213,7 @@ def run_active_audit(noisy_with, noisy_without, canary_class_id, n_llm, n_sample
 # Main
 # ==============================================================================
 def main():
-    parser = argparse.ArgumentParser(description="PV Active Auditing (Bootstrap + Bernstein+MC Error)")
+    parser = argparse.ArgumentParser(description="PV Active Auditing (Bootstrap + Bernstein+CP Error)")
     parser.add_argument("--model_path", type=str)
     parser.add_argument("--data_path", type=str)
     parser.add_argument("--text_col", type=int, default=2)
@@ -225,6 +226,8 @@ def main():
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--gamma", type=float, default=0.05, help="Confidence failure probability")
+    parser.add_argument("--snapshot_gamma_frac", type=float, default=0.5,
+                        help="Fraction of gamma allocated to snapshot phase (>0.5 = tighter snapshot bound)")
     parser.add_argument("--output_dir", type=str, default="results_pv_active")
     parser.add_argument("--output_prefix", type=str, default="pv-active")
     parser.add_argument("--num_runs", type=int, default=5)
@@ -273,10 +276,10 @@ def main():
         output_file = os.path.join(args.output_dir, f"{args.output_prefix}-run{run_id}.txt")
         with open(output_file, "w") as f:
             print("=" * 60, file=f)
-            print("PV Active Auditing (Bootstrap + Bernstein+MC Error Bound)", file=f)
+            print("PV Active Auditing (Bootstrap + Bernstein+CP Error Bound)", file=f)
             print(f"Canary: '{canary_text[:100]}...'", file=f)
             print(f"Noise: Analytic Gaussian (Balle & Wang 2018)", file=f)
-            print(f"Error: Empirical Bernstein (snapshot) + Hoeffding (MC)", file=f)
+            print(f"Error: Empirical Bernstein (snapshot) + Clopper-Pearson (MC)", file=f)
             print(f"Estimator: GDP", file=f)
             print(f"n_llm={args.n_llm}, n_sample={args.n_sample}, T={args.num_subsets}", file=f)
             print("=" * 60, file=f)
@@ -306,7 +309,8 @@ def main():
                 eps_bb, eps_wb = run_active_audit(
                     noisy_with, noisy_without, canary_class_id=0,
                     n_llm=args.n_llm, n_sample=args.n_sample,
-                    delta=args.delta, gamma=args.gamma, f=f
+                    delta=args.delta, gamma=args.gamma, f=f,
+                    snapshot_gamma_frac=args.snapshot_gamma_frac
                 )
                 t3_time = time.time() - t3_start
 
