@@ -221,12 +221,12 @@ def main():
     parser.add_argument("--delimiter", type=str, default=",")
     parser.add_argument("--num_subsets", type=int, default=2, help="Number of partitions T")
     parser.add_argument("--shots_per_subset", type=int, default=1)
-    parser.add_argument("--n_llm", type=int, default=20000, help="Number of clean LLM snapshots")
-    parser.add_argument("--n_sample", type=int, default=4000000, help="Number of bootstrap samples")
+    parser.add_argument("--n_llm", type=int, default=2000, help="Number of clean LLM snapshots")
+    parser.add_argument("--n_sample", type=int, default=400000, help="Number of bootstrap samples")
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--gamma", type=float, default=0.05, help="Confidence failure probability")
-    parser.add_argument("--snapshot_gamma_frac", type=float, default=0.5,
+    parser.add_argument("--snapshot_gamma_frac", type=float, default=0.9,
                         help="Fraction of gamma allocated to snapshot phase (>0.5 = tighter snapshot bound)")
     parser.add_argument("--output_dir", type=str, default="results_pv_active")
     parser.add_argument("--output_prefix", type=str, default="pv-active")
