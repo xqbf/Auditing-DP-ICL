@@ -241,7 +241,7 @@ def main():
     parser.add_argument("--n_sample", type=int, default=400000, help="Bootstrap samples")
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
-    parser.add_argument("--gamma_clip", type=float, default=6.0, help="Log-prob clipping bound")
+    parser.add_argument("--gamma_clip", type=float, default=4.5, help="Log-prob clipping bound")
     parser.add_argument("--gamma_conf", type=float, default=0.05, help="Confidence failure probability")
     parser.add_argument("--snapshot_gamma_frac", type=float, default=0.5,
                         help="Fraction of gamma allocated to snapshot phase (>0.5 = tighter snapshot bound)")
@@ -250,7 +250,7 @@ def main():
     parser.add_argument("--num_runs", type=int, default=5)
     parser.add_argument("--canary_mode", choices=["fixed", "random"], default="random")
     parser.add_argument("--canary_index", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--attack_mode", type=str, choices=["direct", "semantic_similarity"], default="direct")
     parser.add_argument("--context_file", type=str, default=None,
                         help="JSON file from poe_context_search.py with pre-selected contexts")
