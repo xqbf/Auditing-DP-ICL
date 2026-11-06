@@ -32,8 +32,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 
 from auditing_utils import (
     clopper_pearson, gdp_to_eps, analytic_gauss_sigma,
-    empirical_bernstein_correction, build_esa_generator_prompt,
-    load_data_csv,
+    build_esa_generator_prompt, load_data_csv,
 )
 
 # ==============================================================================
@@ -41,6 +40,9 @@ from auditing_utils import (
 # ==============================================================================
 tokenizer = None
 model = None
+# LLM generation temperature. 0.0 -> greedy decoding (do_sample=False);
+# any value > 0 enables sampling at that temperature.
+generation_temperature = 0.0
 
 
 def load_hf_model(model_path):
@@ -66,7 +68,9 @@ def generate_signal_sentence(contexts, canary, y1_target, y2_control,
     with torch.no_grad():
         outputs = model.generate(
             **inputs, max_new_tokens=max_new_tokens,
-            do_sample=False,
+            **({"do_sample": True, "temperature": generation_temperature}
+               if generation_temperature and generation_temperature > 0
+               else {"do_sample": False}),
         )
     response = tokenizer.decode(
         outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
@@ -113,6 +117,7 @@ def main():
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--gamma_conf", type=float, default=0.05)
+    parser.add_argument("--snapshot_gamma_frac", type=float, default=0.5)
     parser.add_argument("--y1_target", type=str, default="mirana wifie overliking")
     parser.add_argument("--y2_control", type=str, default="woundworth mort gambeer")
     parser.add_argument("--output_dir", type=str, default="results_esa_flaw")
@@ -120,7 +125,12 @@ def main():
     parser.add_argument("--num_runs", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--canary_mode", choices=["fixed", "random"], default="random")
+    parser.add_argument("--temperature", type=float, default=0.0,
+                        help="LLM generation temperature (0.0 = greedy decoding)")
     args = parser.parse_args()
+
+    global generation_temperature
+    generation_temperature = args.temperature
 
     load_hf_model(args.model_path)
 
@@ -230,12 +240,22 @@ def main():
                 scores_w = np.dot(noisy_w, y1_embedding) - np.dot(noisy_w, y2_embedding)
                 scores_wo = np.dot(noisy_wo, y1_embedding) - np.dot(noisy_wo, y2_embedding)
 
-                tpr_hat = np.mean(scores_w > 0)
-                fpr_hat = np.mean(scores_wo > 0)
+                tp_count = int(np.sum(scores_w > 0))
+                fp_count = int(np.sum(scores_wo > 0))
+                tpr_hat = tp_count / args.n_sample
+                fpr_hat = fp_count / args.n_sample
 
-                delta_corr = empirical_bernstein_correction(0.0, args.n_llm, args.n_sample, args.gamma_conf)
-                tpr_low = max(0.0, tpr_hat - delta_corr)
-                fpr_up = min(1.0, fpr_hat + delta_corr)
+                # Bernstein snapshot correction + Clopper-Pearson for MC
+                gamma_snap = args.gamma_conf * args.snapshot_gamma_frac
+                gamma_mc = args.gamma_conf * (1.0 - args.snapshot_gamma_frac)
+                log_snap = math.log(2.0 / gamma_snap)
+                bern_corr = (math.sqrt(2.0 * 0.0 * log_snap / args.n_llm)
+                             + 7.0 * log_snap / (3.0 * (args.n_llm - 1)))
+                cp_confidence = 1.0 - gamma_mc
+                cp_tpr_lo, _ = clopper_pearson(tp_count, args.n_sample, cp_confidence)
+                _, cp_fpr_hi = clopper_pearson(fp_count, args.n_sample, cp_confidence)
+                tpr_low = max(0.0, cp_tpr_lo - bern_corr)
+                fpr_up = min(1.0, cp_fpr_hi + bern_corr)
 
                 mu_bb = 0.0
                 if 0 < fpr_up < 1 and 0 < (1 - tpr_low) < 1:

@@ -2,7 +2,7 @@
 
 This is the code repository for the paper **SnapAudit: Active Auditing of Differentially Private In-Context Learning via Snapshot-Based Simulation**.
 
-We implement auditing code for four DP-ICL mechanisms across both text classification and text generation tasks, including active (bootstrap-based) and passive (full-process) auditing, DP flaw detection, and the MSGS distant sentence search algorithm.
+We implement auditing code for four DP-ICL mechanisms across both text classification and text generation tasks, including active (bootstrap-based) and passive (full-process) auditing, DP flaw detection, and the MSGCG distant sentence search algorithm.
 
 # Datasets
 
@@ -41,4 +41,4 @@ Auditing code for **Keyword Space Aggregation (KSA)** and **Embedding Space Aggr
 |`esa_passive.py`|ESA passive auditing (full-process): runs end-to-end ESA pipeline per trial, Clopper-Pearson CI, GDP estimator|
 |`esa_active.py`|ESA active auditing (bootstrap): collects clean embeddings, bootstraps with Gaussian noise (analytic calibration, sensitivity=2/K), two-layer Bernstein+MC error bound, GDP estimator|
 |`esa_flaw_wrong_sensitivity.py`|DP flaw detection: demonstrates ESA with wrong sensitivity (1.0 instead of correct 2/K) leads to privacy violation|
-|`msgs.py`|MSGS (Multi-Sweep Greedy Search): finds maximally distant sentence pairs in embedding space for signal sentence selection|
+|`msgcg.py`|MSGCG (Multi-Sweep GCG): finds maximally distant sentence pairs in embedding space for signal sentence selection|

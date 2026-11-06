@@ -24,7 +24,7 @@ from scipy.stats import norm
 
 from auditing_utils import (
     load_hf_model, load_texts_from_csv, llm_yes_no,
-    clopper_pearson, gdp_to_eps, empirical_bernstein_correction,
+    clopper_pearson, gdp_to_eps,
     DEFENSE_PROMPTS,
 )
 import auditing_utils
@@ -72,6 +72,7 @@ def main():
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--gamma", type=float, default=0.05)
+    parser.add_argument("--snapshot_gamma_frac", type=float, default=0.5)
     parser.add_argument("--output_dir", type=str, default="results_pv_flaw")
     parser.add_argument("--output_prefix", type=str, default="pv-flaw-classical")
     parser.add_argument("--num_runs", type=int, default=5)
@@ -79,9 +80,12 @@ def main():
     parser.add_argument("--canary_mode", choices=["fixed", "random"], default="random")
     parser.add_argument("--canary_index", type=int, default=1)
     parser.add_argument("--attack_mode", type=str, default="direct")
+    parser.add_argument("--temperature", type=float, default=0.0,
+                        help="LLM generation temperature (0.0 = greedy decoding)")
     args = parser.parse_args()
 
     auditing_utils.attack_mode = args.attack_mode
+    auditing_utils.generation_temperature = args.temperature
     load_hf_model(args.model_path)
     all_texts = load_texts_from_csv(args.data_path, args.text_col)
     if not all_texts:
@@ -147,12 +151,22 @@ def main():
                 scores_w = noisy_w[:, canary_id] - np.max(np.delete(noisy_w, canary_id, axis=1), axis=1)
                 scores_wo = noisy_wo[:, canary_id] - np.max(np.delete(noisy_wo, canary_id, axis=1), axis=1)
 
-                tpr_hat = np.mean(scores_w > 0)
-                fpr_hat = np.mean(scores_wo > 0)
+                tp_count = int(np.sum(scores_w > 0))
+                fp_count = int(np.sum(scores_wo > 0))
+                tpr_hat = tp_count / args.n_sample
+                fpr_hat = fp_count / args.n_sample
 
-                delta_corr = empirical_bernstein_correction(0.0, args.n_llm, args.n_sample, args.gamma)
-                tpr_low = max(0.0, tpr_hat - delta_corr)
-                fpr_up = min(1.0, fpr_hat + delta_corr)
+                # Bernstein snapshot correction + Clopper-Pearson for MC
+                gamma_snap = args.gamma * args.snapshot_gamma_frac
+                gamma_mc = args.gamma * (1.0 - args.snapshot_gamma_frac)
+                log_snap = math.log(2.0 / gamma_snap)
+                bern_corr = (math.sqrt(2.0 * 0.0 * log_snap / args.n_llm)
+                             + 7.0 * log_snap / (3.0 * (args.n_llm - 1)))
+                cp_confidence = 1.0 - gamma_mc
+                cp_tpr_lo, _ = clopper_pearson(tp_count, args.n_sample, cp_confidence)
+                _, cp_fpr_hi = clopper_pearson(fp_count, args.n_sample, cp_confidence)
+                tpr_low = max(0.0, cp_tpr_lo - bern_corr)
+                fpr_up = min(1.0, cp_fpr_hi + bern_corr)
 
                 mu_bb = 0.0
                 if 0 < fpr_up < 1 and 0 < (1 - tpr_low) < 1:

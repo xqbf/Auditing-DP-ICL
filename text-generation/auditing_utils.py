@@ -8,6 +8,7 @@ import math
 import csv
 import sys
 import torch
+from tqdm import tqdm
 from scipy.stats import beta, norm
 from scipy.optimize import brentq
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
@@ -19,6 +20,9 @@ tokenizer = None
 model = None
 attack_mode = "semantic_similarity"
 max_new_tokens_global = 10
+# LLM generation temperature. 0.0 -> greedy decoding (do_sample=False);
+# any value > 0 enables sampling at that temperature.
+generation_temperature = 0.0
 
 
 def load_hf_model(model_path: str):
@@ -103,9 +107,40 @@ def generate_response(prompt: str) -> str:
     with torch.no_grad():
         outputs = model.generate(
             **inputs, max_new_tokens=max_new_tokens_global,
-            do_sample=False,
+            **({"do_sample": True, "temperature": generation_temperature}
+               if generation_temperature and generation_temperature > 0
+               else {"do_sample": False}),
         )
     return tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True).strip()
+
+
+def generate_responses(prompts: list[str], batch_size: int = 64, desc: str = None) -> list[str]:
+    """Batched generate_response: same chat template / truncation / decoding, returned
+    in input order. Prompts are length-sorted so each batch carries little padding.
+    batch_size <= 1: plain one-at-a-time generate_response calls (for timing baselines)."""
+    if batch_size <= 1:
+        return [generate_response(p) for p in tqdm(prompts, desc=desc, disable=desc is None)]
+    raws = [tokenizer.apply_chat_template([{"role": "user", "content": p}],
+                                          tokenize=False, add_generation_prompt=True)
+            for p in prompts]
+    order = sorted(range(len(raws)), key=lambda i: len(raws[i]))
+    gen_kwargs = ({"do_sample": True, "temperature": generation_temperature}
+                  if generation_temperature and generation_temperature > 0
+                  else {"do_sample": False})
+    tokenizer.padding_side = "left"   # decoder-only: new tokens must follow the prompt
+    results = [None] * len(raws)
+    for start in tqdm(range(0, len(order), batch_size), desc=desc, disable=desc is None):
+        idx = order[start:start + batch_size]
+        inputs = tokenizer([raws[i] for i in idx], return_tensors="pt", padding=True,
+                           truncation=True, max_length=2048).to(model.device)
+        with torch.no_grad():
+            outputs = model.generate(**inputs, max_new_tokens=max_new_tokens_global,
+                                     pad_token_id=tokenizer.pad_token_id, **gen_kwargs)
+        texts = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[-1]:],
+                                       skip_special_tokens=True)
+        for i, t in zip(idx, texts):
+            results[i] = t.strip()
+    return results
 
 
 def parse_yes_no(response: str) -> str:
@@ -152,6 +187,56 @@ def clopper_pearson(successes, trials, confidence_level=0.95):
     lower = beta.ppf(alpha / 2, successes, trials - successes + 1)
     upper = beta.ppf(1 - alpha / 2, successes + 1, trials - successes)
     return (lower if not np.isnan(lower) else 0.0, upper if not np.isnan(upper) else 1.0)
+
+
+def _kl_bernoulli(p, q):
+    """KL(Bern(p) || Bern(q)), clipped for numerical safety."""
+    e = 1e-12
+    p = min(max(p, e), 1.0 - e)
+    q = min(max(q, e), 1.0 - e)
+    return p * math.log(p / q) + (1.0 - p) * math.log((1.0 - p) / (1.0 - q))
+
+
+def kl_upper_bound(p_hat, n, gamma):
+    """One-sided (1-gamma) upper confidence bound on the mean of a [0,1]-bounded
+    variable, via the Chernoff / KL inequality  P(mean_hat <= a | mu=q) <= exp(-n*KL(a||q)).
+
+    This is the continuous-[0,1] generalization of the Clopper-Pearson upper bound
+    (they coincide for Bernoulli data). It drops the loose 7/3 range constant of the
+    empirical-Bernstein bound, so in the small-rate (deep-tail) regime it approaches
+    the information-theoretic floor log(1/gamma)/n instead of 7*log(2/gamma)/(3(n-1)).
+    """
+    if n <= 0:
+        return 1.0
+    if p_hat >= 1.0:
+        return 1.0
+    bound = math.log(1.0 / gamma) / n
+    lo, hi = p_hat, 1.0
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if _kl_bernoulli(p_hat, mid) > bound:
+            hi = mid
+        else:
+            lo = mid
+    return lo
+
+
+def kl_lower_bound(p_hat, n, gamma):
+    """One-sided (1-gamma) lower confidence bound on the mean of a [0,1]-bounded
+    variable (KL / Chernoff). Symmetric counterpart of kl_upper_bound."""
+    if n <= 0:
+        return 0.0
+    if p_hat <= 0.0:
+        return 0.0
+    bound = math.log(1.0 / gamma) / n
+    lo, hi = 0.0, p_hat
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if _kl_bernoulli(p_hat, mid) > bound:
+            lo = mid
+        else:
+            hi = mid
+    return hi
 
 
 def gdp_to_eps(mu, delta=1e-5):

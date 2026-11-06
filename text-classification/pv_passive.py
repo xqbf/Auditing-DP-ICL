@@ -21,7 +21,7 @@ from tqdm import tqdm
 from scipy.stats import norm
 
 from auditing_utils import (
-    load_hf_model, load_texts_from_csv, llm_yes_no,
+    load_hf_model, load_texts_from_csv, llm_yes_no_batch,
     analytic_gauss_sigma, clopper_pearson, gdp_to_eps,
     DEFENSE_PROMPTS,
 )
@@ -34,7 +34,7 @@ import auditing_utils
 class PVClassifier:
     """Private Voting classifier with analytic Gaussian mechanism."""
 
-    def __init__(self, class_labels, epsilon, delta):
+    def __init__(self, class_labels, epsilon, delta, classical_noise=False, variance_as_std=False):
         self.class_labels = class_labels
         self.num_classes = len(class_labels)
         self.label_to_id = {label: i for i, label in enumerate(class_labels)}
@@ -42,33 +42,41 @@ class PVClassifier:
         self.epsilon = epsilon
         self.delta = delta
         sensitivity = math.sqrt(2)  # L2 sensitivity of vote histogram
-        self.sigma = analytic_gauss_sigma(sensitivity, epsilon, delta)
+        self.sigma = (sensitivity * math.sqrt(2.0 * math.log(1.25 / delta)) / epsilon if classical_noise
+                      else analytic_gauss_sigma(sensitivity, epsilon, delta))
+        if variance_as_std:  # DP flaw: sigma^2 is passed where the sampler expects a standard deviation
+            self.sigma = self.sigma ** 2
 
-    def run_full_process(self, exemplars, query, num_subsets):
-        """Run full DP-ICL: partition → vote → add noise → argmax."""
-        shuffled = np.random.permutation(len(exemplars))
-        partitions = np.array_split(shuffled, num_subsets)
+    def run_full_processes(self, exemplars, query, num_subsets, n_trials, batch_size, desc=None):
+        """Run n_trials full DP-ICL processes: partition → vote → add noise → argmax.
+        Every trial's partition is drawn first, all subset votes go through the LLM
+        in batched passes, then each trial adds its own noise."""
+        trial_subsets = []
+        for _ in range(n_trials):
+            shuffled = np.random.permutation(len(exemplars))
+            trial_subsets.append([[exemplars[i][0] for i in s]
+                                  for s in np.array_split(shuffled, num_subsets) if len(s) > 0])
+        votes = llm_yes_no_batch([texts for subsets in trial_subsets for texts in subsets],
+                                 query, batch_size, desc)
 
-        histogram = np.zeros(self.num_classes)
-        for subset_indices in partitions:
-            if len(subset_indices) == 0:
-                continue
-            subset_texts = [exemplars[i][0] for i in subset_indices]
-            subset_labels = [exemplars[i][1] for i in subset_indices]
-            vote = llm_yes_no(subset_texts, query, subset_labels)
-            if vote in self.label_to_id:
-                histogram[self.label_to_id[vote]] += 1
-
-        noisy_histogram = histogram + np.random.normal(0, self.sigma, self.num_classes)
-        winner = np.argmax(noisy_histogram)
-        return self.id_to_label[winner], noisy_histogram
+        results, pos = [], 0
+        for subsets in trial_subsets:
+            histogram = np.zeros(self.num_classes)
+            for vote in votes[pos:pos + len(subsets)]:
+                if vote in self.label_to_id:
+                    histogram[self.label_to_id[vote]] += 1
+            pos += len(subsets)
+            noisy_histogram = histogram + np.random.normal(0, self.sigma, self.num_classes)
+            winner = np.argmax(noisy_histogram)
+            results.append((self.id_to_label[winner], noisy_histogram))
+        return results
 
 
 # ==============================================================================
 # Passive Audit
 # ==============================================================================
 def run_passive_audit(pv, exemplars_with, exemplars_without, query,
-                      canary_class_id, num_subsets, n_trials, delta, f):
+                      canary_class_id, num_subsets, n_trials, delta, f, batch_size):
     """
     Run n_trials full-process DP-ICL calls for both with/without canary.
     Compute black-box and white-box epsilon lower bounds.
@@ -79,8 +87,8 @@ def run_passive_audit(pv, exemplars_with, exemplars_without, query,
     # White-box: advantage score = noisy_hist[canary] - max(noisy_hist[other])
     scores_with = []
     bb_tp = 0
-    for _ in tqdm(range(n_trials), desc="Passive trials (with canary)"):
-        label, noisy_hist = pv.run_full_process(exemplars_with, query, num_subsets)
+    for label, noisy_hist in pv.run_full_processes(exemplars_with, query, num_subsets, n_trials,
+                                                   batch_size, desc="Passive trials (with canary)"):
         if label == "Yes":
             bb_tp += 1
         mx = max(noisy_hist[j] for j in range(len(noisy_hist)) if j != canary_class_id)
@@ -88,8 +96,8 @@ def run_passive_audit(pv, exemplars_with, exemplars_without, query,
 
     scores_without = []
     bb_fp = 0
-    for _ in tqdm(range(n_trials), desc="Passive trials (without canary)"):
-        label, noisy_hist = pv.run_full_process(exemplars_without, query, num_subsets)
+    for label, noisy_hist in pv.run_full_processes(exemplars_without, query, num_subsets, n_trials,
+                                                   batch_size, desc="Passive trials (without canary)"):
         if label == "Yes":
             bb_fp += 1
         mx = max(noisy_hist[j] for j in range(len(noisy_hist)) if j != canary_class_id)
@@ -166,20 +174,31 @@ def main():
     parser.add_argument("--output_prefix", type=str, default="pv-passive")
     parser.add_argument("--num_runs", type=int, default=5)
     parser.add_argument("--canary_mode", choices=["fixed", "random"], default="random")
+    parser.add_argument("--variance_as_std", action="store_true",
+                        help="DP flaw: sample noise with std sigma^2 instead of sigma")
+    parser.add_argument("--classical_noise", action="store_true",
+                        help="DP flaw: classical sigma = Delta*sqrt(2 ln(1.25/delta))/eps instead of analytic")
     parser.add_argument("--canary_index", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--defense", type=str, choices=list(DEFENSE_PROMPTS.keys()), default="none")
     parser.add_argument("--attack_mode", type=str, choices=["direct", "semantic_similarity"], default="direct")
     parser.add_argument("--l3_defense", action="store_true", default=False)
+    parser.add_argument("--encoding", type=str, default="utf-8", help="CSV file encoding")
+    parser.add_argument("--temperature", type=float, default=0.0,
+                        help="LLM generation temperature (0.0 = greedy decoding)")
+    parser.add_argument("--batch_size", type=int, default=64,
+                        help="Prompts per batched LLM generate call (1 = one call at a time)")
     args = parser.parse_args()
 
     # Set global config
     auditing_utils.defense_prompt = DEFENSE_PROMPTS[args.defense]
     auditing_utils.attack_mode = args.attack_mode
     auditing_utils.use_l3_defense = args.l3_defense
+    auditing_utils.generation_temperature = args.temperature
 
     load_hf_model(args.model_path)
-    all_texts = load_texts_from_csv(args.data_path, args.text_col, args.delimiter, not args.no_header)
+    all_texts = load_texts_from_csv(args.data_path, args.text_col, args.delimiter,
+                                    not args.no_header, args.encoding)
     if not all_texts:
         print("Error: no texts loaded.")
         return
@@ -211,6 +230,7 @@ def main():
         exemplars_with = [(canary_text, "Yes")] + base_exemplars[1:]
 
         output_file = os.path.join(args.output_dir, f"{args.output_prefix}-run{run_id}.txt")
+        t_run = time.time()
         with open(output_file, "w") as f:
             print("=" * 60, file=f)
             print("PV Passive Auditing (Full Process)", file=f)
@@ -222,7 +242,7 @@ def main():
             print("=" * 60, file=f)
 
             for epsilon in args.epsilons:
-                pv = PVClassifier(["Yes", "No"], epsilon, args.delta)
+                pv = PVClassifier(["Yes", "No"], epsilon, args.delta, args.classical_noise, args.variance_as_std)
                 print(f"\n{'='*40} eps_theory={epsilon} {'='*40}", file=f)
                 print(f"sigma={pv.sigma:.6f}", file=f)
 
@@ -230,7 +250,8 @@ def main():
                 eps_bb, eps_wb = run_passive_audit(
                     pv, exemplars_with, exemplars_without, canary_text,
                     canary_class_id=0, num_subsets=args.num_subsets,
-                    n_trials=args.n_trials, delta=args.delta, f=f
+                    n_trials=args.n_trials, delta=args.delta, f=f,
+                    batch_size=args.batch_size
                 )
                 elapsed = time.time() - t0
 
@@ -238,6 +259,11 @@ def main():
                 print(f"[TIMING] {elapsed:.1f}s total, {elapsed/args.n_trials*1000:.2f}ms per trial", file=f)
                 print(f"Run {run_id}, eps={epsilon}: bb={eps_bb:.4f}, wb={eps_wb:.4f}")
 
+        wall = time.time() - t_run
+        with open(output_file, "a") as f:
+            print(f"\n[WALLCLOCK] run {run_id}: {wall:.1f}s for {len(args.epsilons)} epsilons "
+                  f"(LLM + audit, excl. model load)", file=f)
+        print(f"[WALLCLOCK] run {run_id}: {wall:.1f}s for {len(args.epsilons)} epsilons")
         print(f"Results saved to {output_file}")
 
 

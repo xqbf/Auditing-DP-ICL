@@ -20,6 +20,11 @@ model = None
 defense_prompt = None
 attack_mode = "direct"
 use_l3_defense = False
+# LLM generation temperature for Yes/No membership answers (PV-style pipelines).
+# 0.0 -> greedy decoding (do_sample=False); any value > 0 enables sampling.
+# Sampling sets top_p=1.0: Llama 3's generation_config.json has top_p=0.9, which
+# otherwise collapses sampling to greedy whenever the top token exceeds 0.9.
+generation_temperature = 0.0
 
 
 def load_hf_model(model_path: str):
@@ -172,7 +177,9 @@ def llm_yes_no(contexts: list[str], query_article: str, exemplars_labels: list[s
         max_new_tokens=5,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id,
-        do_sample=False,
+        **({"do_sample": True, "temperature": generation_temperature, "top_p": 1.0}
+           if generation_temperature and generation_temperature > 0
+           else {"do_sample": False}),
     )
     outputs = model.generate(**inputs, generation_config=generation_config)
     response = tokenizer.decode(
@@ -190,6 +197,53 @@ def llm_yes_no(contexts: list[str], query_article: str, exemplars_labels: list[s
     return np.random.choice(["Yes", "No"])
 
 
+def llm_yes_no_batch(context_lists: list[list[str]], query_article: str,
+                     batch_size: int = 64, desc: str = None) -> list[str]:
+    """Batched llm_yes_no over many context lists (same prompt, template, decoding
+    and parsing), returned in input order. Prompts are length-sorted so each batch
+    carries little padding. batch_size <= 1: plain one-at-a-time llm_yes_no calls."""
+    from tqdm import tqdm
+    if batch_size <= 1:
+        return [llm_yes_no(c, query_article)
+                for c in tqdm(context_lists, desc=desc, disable=desc is None)]
+    contents = [build_pv_attack_prompt(c, query_article) for c in context_lists]
+    raws = []
+    for content in contents:
+        messages = []
+        if defense_prompt is not None:
+            messages.append({"role": "system", "content": defense_prompt})
+        messages.append({"role": "user", "content": content})
+        raws.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True))
+    gen_kwargs = ({"do_sample": True, "temperature": generation_temperature, "top_p": 1.0}
+                  if generation_temperature and generation_temperature > 0
+                  else {"do_sample": False})
+    order = sorted(range(len(raws)), key=lambda i: len(raws[i]))
+    tokenizer.padding_side = "left"   # decoder-only: new tokens must follow the prompt
+    responses = [None] * len(raws)
+    for start in tqdm(range(0, len(order), batch_size), desc=desc, disable=desc is None):
+        idx = order[start:start + batch_size]
+        inputs = tokenizer([raws[i] for i in idx], return_tensors="pt", padding=True).to(model.device)
+        with torch.no_grad():
+            outputs = model.generate(**inputs, max_new_tokens=5, eos_token_id=tokenizer.eos_token_id,
+                                     pad_token_id=tokenizer.pad_token_id, **gen_kwargs)
+        texts = tokenizer.batch_decode(outputs[:, inputs["input_ids"].shape[-1]:],
+                                       skip_special_tokens=True)
+        for i, t in zip(idx, texts):
+            responses[i] = t.strip().lower()
+
+    votes = []
+    for content, response in zip(contents, responses):
+        if use_l3_defense and _leakage_checker(content, response) == "Attack":
+            votes.append("No")
+        elif "yes" in response:
+            votes.append("Yes")
+        elif "no" in response:
+            votes.append("No")
+        else:
+            votes.append(np.random.choice(["Yes", "No"]))
+    return votes
+
+
 def get_label_token_ids(class_labels: list[str]) -> list[int]:
     """Map class labels to their first token IDs."""
     return [tokenizer.encode(label, add_special_tokens=False)[0] for label in class_labels]
@@ -205,10 +259,49 @@ def get_log_probs_for_labels(prompt: str, label_token_ids: list[int]) -> np.ndar
         outputs = model(**inputs)
     logits = outputs.logits[0, -1, :]
     class_logits = torch.stack([logits[tid] for tid in label_token_ids])
+    return _class_log_probs(class_logits).cpu().float().numpy()
+
+
+def _class_log_probs(class_logits: torch.Tensor) -> torch.Tensor:
+    """Label log-probs from label logits (last dim), honoring logit_temperature."""
+    if logit_temperature == 0.0:
+        # T -> 0 limit: hard argmax (0 for top label, -inf for the rest)
+        class_log_probs = torch.full_like(class_logits, float("-inf"))
+        class_log_probs.scatter_(-1, class_logits.argmax(dim=-1, keepdim=True), 0.0)
+        return class_log_probs
     if logit_temperature != 1.0:
         class_logits = class_logits / logit_temperature
-    class_log_probs = torch.log_softmax(class_logits, dim=-1)
-    return class_log_probs.cpu().float().numpy()
+    return torch.log_softmax(class_logits.float(), dim=-1)
+
+
+def get_log_probs_for_labels_batch(prompts: list[str], label_token_ids: list[int],
+                                   batch_size: int = 64, desc: str = None) -> np.ndarray:
+    """Batched get_log_probs_for_labels: (len(prompts), n_labels), in input order.
+    The forward pass is deterministic, so each distinct prompt is run only once.
+    Prompts are length-sorted and right-padded; logits are read at each prompt's
+    last real token, so positions match the one-at-a-time path.
+    batch_size <= 1: plain one-at-a-time calls with no dedup (for timing baselines)."""
+    from tqdm import tqdm
+    if batch_size <= 1:
+        return np.array([get_log_probs_for_labels(p, label_token_ids)
+                         for p in tqdm(prompts, desc=desc, disable=desc is None)])
+    uniq = list(dict.fromkeys(prompts))
+    lengths = [len(ids) for ids in tokenizer(uniq, truncation=True, max_length=2048)["input_ids"]]
+    order = sorted(range(len(uniq)), key=lambda i: lengths[i])
+    tokenizer.padding_side = "right"
+    label_ids = torch.tensor(label_token_ids, device=model.device)
+    out = np.zeros((len(uniq), len(label_token_ids)), dtype=np.float32)
+    for start in tqdm(range(0, len(order), batch_size), desc=desc, disable=desc is None):
+        idx = order[start:start + batch_size]
+        inputs = tokenizer([uniq[i] for i in idx], return_tensors="pt", padding=True,
+                           truncation=True, max_length=2048).to(model.device)
+        with torch.no_grad():
+            logits = model(**inputs).logits                           # (B, L, V)
+        last = inputs["attention_mask"].sum(dim=1) - 1
+        class_logits = logits[torch.arange(len(idx), device=model.device), last][:, label_ids]
+        out[idx] = _class_log_probs(class_logits).cpu().float().numpy()
+    row = {p: i for i, p in enumerate(uniq)}
+    return out[[row[p] for p in prompts]]
 
 
 # ==============================================================================
