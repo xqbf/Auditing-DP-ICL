@@ -6,7 +6,7 @@ Runs the full Product-of-Experts pipeline end-to-end for each trial:
   2. Sum clipped log-probs → utility vector
   3. Exponential mechanism selects output class
 
-Uses Clopper-Pearson CI on observed FPR/FNR.
+Uses empirical-Bernstein (Maurer-Pontil) bounds on observed FPR/FNR (one DP draw per LLM output).
 Uses pure-DP estimator (exponential mechanism → pure DP).
 
 Usage:
@@ -25,7 +25,7 @@ from tqdm import tqdm
 from auditing_utils import (
     load_hf_model, load_texts_from_csv, build_poe_expert_prompt,
     get_label_token_ids, get_log_probs_for_labels_batch,
-    clopper_pearson, pure_dp_eps_lower_bound, DEFENSE_PROMPTS,
+    empirical_bernstein_interval, pure_dp_eps_lower_bound, DEFENSE_PROMPTS,
 )
 import auditing_utils
 
@@ -123,8 +123,8 @@ def run_passive_audit(poe, contexts_with, contexts_without, query,
 
     # === Black-box ===
     bb_fn = n_trials - bb_tp
-    _, alpha_upper_bb = clopper_pearson(bb_fp, n_trials, confidence)
-    _, beta_upper_bb = clopper_pearson(bb_fn, n_trials, confidence)
+    _, alpha_upper_bb = empirical_bernstein_interval(bb_fp, n_trials, confidence)
+    _, beta_upper_bb = empirical_bernstein_interval(bb_fn, n_trials, confidence)
     eps_bb = pure_dp_eps_lower_bound(alpha_upper_bb, beta_upper_bb, delta)
     print(f"\n[Black-box] TPR={bb_tp/n_trials:.4f}, FPR={bb_fp/n_trials:.4f}", file=f)
     print(f"[Black-box] eps_lower={eps_bb:.4f}", file=f)
@@ -141,8 +141,8 @@ def run_passive_audit(poe, contexts_with, contexts_without, query,
     for threshold in candidates:
         fp = n_trials - int(np.searchsorted(obs_without, threshold, side="right"))
         fn = int(np.searchsorted(obs_with, threshold, side="right"))
-        _, au = clopper_pearson(fp, n_trials, confidence)
-        _, bu = clopper_pearson(fn, n_trials, confidence)
+        _, au = empirical_bernstein_interval(fp, n_trials, confidence)
+        _, bu = empirical_bernstein_interval(fn, n_trials, confidence)
         if au >= 1 or bu >= 1 or au <= 0 or bu <= 0:
             continue
         cur_eps = pure_dp_eps_lower_bound(au, bu, delta)
@@ -234,9 +234,9 @@ def main():
             print(f"Canary: '{canary_text[:100]}...'", file=f)
             print(f"Mechanism: Exponential (pure DP)", file=f)
             if len(js) == 1:
-                print(f"Confidence: Clopper-Pearson 95%", file=f)
+                print(f"Confidence: empirical-Bernstein 95%", file=f)
             else:
-                print(f"Confidence: Clopper-Pearson {confidence:.4g} per J "
+                print(f"Confidence: empirical-Bernstein {confidence:.4g} per J "
                       f"(Bonferroni over {len(js)} J)", file=f)
             print(f"Estimator: Pure DP", file=f)
             jstr = js[0] if len(js) == 1 else js

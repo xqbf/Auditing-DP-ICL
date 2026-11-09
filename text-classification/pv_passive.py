@@ -3,7 +3,7 @@ PV Passive Auditing (Full Process).
 
 Runs the full DP-ICL Private Voting pipeline end-to-end for each trial.
 Each trial makes real LLM calls, adds Gaussian noise, and records the outcome.
-Uses Clopper-Pearson confidence intervals on the observed FPR/FNR.
+Uses empirical-Bernstein (Maurer-Pontil) bounds on the observed FPR/FNR (one DP draw per LLM output).
 Converts to epsilon via GDP estimator (Gaussian mechanism → GDP).
 
 Usage:
@@ -22,7 +22,7 @@ from scipy.stats import norm
 
 from auditing_utils import (
     load_hf_model, load_texts_from_csv, llm_yes_no_batch,
-    analytic_gauss_sigma, clopper_pearson, gdp_to_eps,
+    analytic_gauss_sigma, empirical_bernstein_interval, gdp_to_eps,
     DEFENSE_PROMPTS,
 )
 import auditing_utils
@@ -107,8 +107,8 @@ def run_passive_audit(pv, exemplars_with, exemplars_without, query,
 
     # === Black-box result (threshold at argmax = canary class) ===
     bb_fn = n_trials - bb_tp
-    _, alpha_upper_bb = clopper_pearson(bb_fp, n_trials, confidence)
-    _, beta_upper_bb = clopper_pearson(bb_fn, n_trials, confidence)
+    _, alpha_upper_bb = empirical_bernstein_interval(bb_fp, n_trials, confidence)
+    _, beta_upper_bb = empirical_bernstein_interval(bb_fn, n_trials, confidence)
     mu_bb = 0.0
     if 0 < alpha_upper_bb < 1 and 0 < beta_upper_bb < 1:
         mu_bb = max(
@@ -131,8 +131,8 @@ def run_passive_audit(pv, exemplars_with, exemplars_without, query,
     for threshold in candidate_thresholds:
         fp = n_trials - int(np.searchsorted(obs_without, threshold, side='right'))
         fn = int(np.searchsorted(obs_with, threshold, side='right'))
-        _, au = clopper_pearson(fp, n_trials, confidence)
-        _, bu = clopper_pearson(fn, n_trials, confidence)
+        _, au = empirical_bernstein_interval(fp, n_trials, confidence)
+        _, bu = empirical_bernstein_interval(fn, n_trials, confidence)
         if not (0 < au < 1 and 0 < bu < 1):
             continue
         mu = max(
@@ -236,7 +236,7 @@ def main():
             print("PV Passive Auditing (Full Process)", file=f)
             print(f"Canary: '{canary_text[:100]}...'", file=f)
             print(f"Noise: Analytic Gaussian (Balle & Wang 2018)", file=f)
-            print(f"Confidence: Clopper-Pearson 95%", file=f)
+            print(f"Confidence: empirical-Bernstein 95%", file=f)
             print(f"Estimator: GDP (Gaussian mechanism)", file=f)
             print(f"n_trials={args.n_trials}, T={args.num_subsets}", file=f)
             print("=" * 60, file=f)

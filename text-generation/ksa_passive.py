@@ -5,7 +5,7 @@ Runs the full KSA pipeline for each trial:
   1. Each subset generates Yes/No → vote histogram
   2. Joint Exponential Mechanism selects output (K=1 → standard EM)
 
-Uses Clopper-Pearson CI. Uses pure-DP estimator (exponential mechanism).
+Uses empirical-Bernstein (Maurer-Pontil) bounds. Uses pure-DP estimator (exponential mechanism).
 
 Usage:
     python ksa_passive.py --data_path /path/to/samsum/train.csv --dataset_name samsum
@@ -21,7 +21,7 @@ import torch
 
 from auditing_utils import (
     load_hf_model, load_texts, build_membership_prompt, generate_responses,
-    parse_yes_no, clopper_pearson, pure_dp_eps_lower_bound,
+    parse_yes_no, empirical_bernstein_interval, pure_dp_eps_lower_bound,
 )
 import auditing_utils
 
@@ -62,7 +62,7 @@ def run_passive_audit(all_texts, canary_text, canary_index, num_exemplars,
     """num_exemplars: list of J values. A single J keeps the original behaviour.
     Several J (requires fixed_context) run a J sweep as in ksa_active.py: one fixed draw W
     of max(J) exemplars per run, without_J = W[:J], with_J = [canary] + W[:J-1], each J at
-    Clopper-Pearson confidence 1-0.05/len(J) (Bonferroni); the best over J is reported."""
+    empirical-Bernstein confidence 1-0.05/len(J) (Bonferroni); the best over J is reported."""
     js = list(num_exemplars)
     if len(js) > 1 and not fixed_context:
         raise ValueError("A J sweep (several --num_exemplars) requires --fixed_context")
@@ -141,8 +141,8 @@ def audit_one(contexts_with, contexts_without, canary_text, epsilon,
 
     # Black-box
     bb_fn = n_trials - bb_tp
-    _, au_bb = clopper_pearson(bb_fp, n_trials, confidence)
-    _, bu_bb = clopper_pearson(bb_fn, n_trials, confidence)
+    _, au_bb = empirical_bernstein_interval(bb_fp, n_trials, confidence)
+    _, bu_bb = empirical_bernstein_interval(bb_fn, n_trials, confidence)
     eps_bb = pure_dp_eps_lower_bound(au_bb, bu_bb, delta)
     print(f"[Black-box] TPR={bb_tp/n_trials:.4f}, FPR={bb_fp/n_trials:.4f}", file=f)
     print(f"[Black-box] eps_lower={eps_bb:.4f}", file=f)
@@ -158,8 +158,8 @@ def audit_one(contexts_with, contexts_without, canary_text, epsilon,
     for threshold in candidates:
         fp = n_trials - int(np.searchsorted(obs_without, threshold, side="right"))
         fn = int(np.searchsorted(obs_with, threshold, side="right"))
-        _, au = clopper_pearson(fp, n_trials, confidence)
-        _, bu = clopper_pearson(fn, n_trials, confidence)
+        _, au = empirical_bernstein_interval(fp, n_trials, confidence)
+        _, bu = empirical_bernstein_interval(fn, n_trials, confidence)
         if au >= 1 or bu >= 1 or au <= 0 or bu <= 0:
             continue
         cur = pure_dp_eps_lower_bound(au, bu, delta)
@@ -231,9 +231,9 @@ def main():
             print(f"Estimator: Pure DP (exponential mechanism)", file=f)
             js = args.num_exemplars
             if len(js) == 1:
-                print(f"Confidence: Clopper-Pearson 95%", file=f)
+                print(f"Confidence: empirical-Bernstein 95%", file=f)
             else:
-                print(f"Confidence: Clopper-Pearson {1.0 - 0.05 / len(js):.4g} per J "
+                print(f"Confidence: empirical-Bernstein {1.0 - 0.05 / len(js):.4g} per J "
                       f"(Bonferroni over {len(js)} J)", file=f)
             print(f"n_trials={args.n_trials}, J={js[0] if len(js) == 1 else js}", file=f)
             print(f"fixed_context={args.fixed_context}", file=f)

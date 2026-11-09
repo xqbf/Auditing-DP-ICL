@@ -7,7 +7,7 @@ Runs the full Embedding Space Aggregation pipeline end-to-end for each trial:
   3. Gaussian noise (analytic calibration, sensitivity=2/K)
   4. Map to nearest candidate sentence
 
-Uses Clopper-Pearson CI. Uses GDP estimator (Gaussian mechanism).
+Uses empirical-Bernstein (Maurer-Pontil) bounds. Uses GDP estimator (Gaussian mechanism).
 
 Usage:
     python esa_passive.py --data_path /path/to/samsum/train.csv
@@ -28,7 +28,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 
 from auditing_utils import (
-    clopper_pearson, gdp_to_eps, analytic_gauss_sigma,
+    empirical_bernstein_interval, gdp_to_eps, analytic_gauss_sigma,
     build_esa_generator_prompt, load_data_csv, DATASET_CONFIGS,
 )
 
@@ -223,8 +223,8 @@ def run_passive_audit(esa, all_data, canary_index, canary_exemplar, canary_fact,
 
     # === Black-box (mapping attack) ===
     bb_fn = n_trials - bb_tp
-    _, alpha_upper_bb = clopper_pearson(bb_fp, n_trials, confidence)
-    _, beta_upper_bb = clopper_pearson(bb_fn, n_trials, confidence)
+    _, alpha_upper_bb = empirical_bernstein_interval(bb_fp, n_trials, confidence)
+    _, beta_upper_bb = empirical_bernstein_interval(bb_fn, n_trials, confidence)
     mu_bb = max(0, norm.ppf(1 - beta_upper_bb) - norm.ppf(alpha_upper_bb))
     eps_bb = gdp_to_eps(mu_bb, delta)
     print(f"\n[Black-box] TPR={bb_tp/n_trials:.4f}, FPR={bb_fp/n_trials:.4f}", file=f)
@@ -241,8 +241,8 @@ def run_passive_audit(esa, all_data, canary_index, canary_exemplar, canary_fact,
     for threshold in candidates:
         fp = n_trials - int(np.searchsorted(obs_without, threshold, side="right"))
         fn = int(np.searchsorted(obs_with, threshold, side="right"))
-        _, au = clopper_pearson(fp, n_trials, confidence)
-        _, bu = clopper_pearson(fn, n_trials, confidence)
+        _, au = empirical_bernstein_interval(fp, n_trials, confidence)
+        _, bu = empirical_bernstein_interval(fn, n_trials, confidence)
         if au >= 1 or bu >= 1 or au <= 0 or bu <= 0:
             continue
         mu = max(0, norm.ppf(1 - bu) - norm.ppf(au))
@@ -341,7 +341,7 @@ def main():
             print(f"Sensitivity: 2/K = {2.0/args.num_subsets:.6f}", file=f)
             print(f"Noise: Analytic Gaussian (Balle & Wang 2018)", file=f)
             print(f"Estimator: GDP", file=f)
-            print(f"Confidence: Clopper-Pearson 95%", file=f)
+            print(f"Confidence: empirical-Bernstein 95%", file=f)
             print(f"n_trials={args.n_trials}, K={args.num_subsets}", file=f)
             print(f"Canary: '{canary_fact[:100]}...'", file=f)
             print("=" * 60, file=f)

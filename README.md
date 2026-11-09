@@ -23,9 +23,9 @@ Auditing code for **Private Voting (PV)** and **Product-of-Experts (PoE)** mecha
 |File|Description|
 | :----: | :----: |
 |`auditing_utils.py`|Shared utilities: LLM setup, prompt building, DP estimators (GDP, pure-DP), Bernstein+MC error bounds, data loading|
-|`pv_passive.py`|PV passive auditing (full-process): runs end-to-end PV pipeline per trial, Clopper-Pearson CI, GDP estimator|
+|`pv_passive.py`|PV passive auditing (full-process): runs end-to-end PV pipeline per trial, empirical-Bernstein bound (one DP draw per LLM output), GDP estimator|
 |`pv_active.py`|PV active auditing (bootstrap): collects clean snapshots, bootstraps with Gaussian noise, two-layer Bernstein+MC error bound, GDP estimator|
-|`poe_passive.py`|PoE passive auditing (full-process): runs end-to-end PoE pipeline per trial, Clopper-Pearson CI, pure-DP estimator|
+|`poe_passive.py`|PoE passive auditing (full-process): runs end-to-end PoE pipeline per trial, empirical-Bernstein bound (one DP draw per LLM output), pure-DP estimator|
 |`poe_active.py`|PoE active auditing (bootstrap): collects clean utility vectors, bootstraps with Gumbel noise, two-layer Bernstein+MC error bound, pure-DP estimator|
 |`pv_flaw_classical_gaussian.py`|DP flaw detection: demonstrates classical Gaussian calibration is insufficient at high epsilon|
 
@@ -36,9 +36,9 @@ Auditing code for **Keyword Space Aggregation (KSA)** and **Embedding Space Aggr
 |File|Description|
 | :----: | :----: |
 |`auditing_utils.py`|Shared utilities: LLM setup, prompt building, DP estimators (GDP, pure-DP), Bernstein+MC error bounds, data loading|
-|`ksa_passive.py`|KSA passive auditing (full-process): runs end-to-end KSA pipeline per trial, Clopper-Pearson CI, pure-DP estimator|
+|`ksa_passive.py`|KSA passive auditing (full-process): runs end-to-end KSA pipeline per trial, empirical-Bernstein bound (one DP draw per LLM output), pure-DP estimator|
 |`ksa_active.py`|KSA active auditing (bootstrap): collects clean vote histograms, bootstraps with Gumbel noise, two-layer Bernstein+MC error bound, pure-DP estimator|
-|`esa_passive.py`|ESA passive auditing (full-process): runs end-to-end ESA pipeline per trial, Clopper-Pearson CI, GDP estimator|
+|`esa_passive.py`|ESA passive auditing (full-process): runs end-to-end ESA pipeline per trial, empirical-Bernstein bound (one DP draw per LLM output), GDP estimator|
 |`esa_active.py`|ESA active auditing (bootstrap): collects clean embeddings, bootstraps with Gaussian noise (analytic calibration, sensitivity=2/K), two-layer Bernstein+MC error bound, GDP estimator|
 |`esa_flaw_wrong_sensitivity.py`|DP flaw detection: demonstrates ESA with wrong sensitivity (1.0 instead of correct 2/K) leads to privacy violation|
 |`msgcg.py`|MSGCG (Multi-Sweep GCG): finds maximally distant sentence pairs in embedding space for signal sentence selection|

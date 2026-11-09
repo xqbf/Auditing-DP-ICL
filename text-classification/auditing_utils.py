@@ -347,6 +347,23 @@ def clopper_pearson(successes, trials, confidence_level=0.95):
     return (lower if not np.isnan(lower) else 0.0, upper if not np.isnan(upper) else 1.0)
 
 
+def empirical_bernstein_interval(successes, trials, confidence=0.95):
+    """Empirical-Bernstein (Maurer-Pontil) confidence interval for a rate.
+
+    Passive auditing is the active audit with one DP draw per LLM output: each
+    trial gives an iid {0,1} per-output rate, so the same bound as KSA/PoE active
+    applies with m=1 and n_llm=trials (gamma = 1-confidence per side):
+        mean +/- [sqrt(2*s2*log(2/gamma)/n) + 7*log(2/gamma)/(3*(n-1))]
+    """
+    if trials <= 1:
+        return (0.0, 1.0)
+    p_hat = successes / trials
+    s2 = p_hat * (1.0 - p_hat) * trials / (trials - 1)  # sample variance, ddof=1
+    log_g = math.log(2.0 / (1.0 - confidence))
+    dev = math.sqrt(2.0 * s2 * log_g / trials) + 7.0 * log_g / (3.0 * (trials - 1))
+    return (max(0.0, p_hat - dev), min(1.0, p_hat + dev))
+
+
 def gdp_to_eps(mu, delta=1e-5):
     """Convert GDP mu to (epsilon, delta)-DP."""
     if mu <= 0:
