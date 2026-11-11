@@ -271,7 +271,7 @@ def main():
     parser.add_argument("--dataset_type", type=str, default="samsum", choices=["samsum", "xsum"])
     parser.add_argument("--num_subsets", type=int, default=8)
     parser.add_argument("--shots_per_subset", type=int, default=1)
-    parser.add_argument("--n_trials", type=int, default=20000)
+    parser.add_argument("--n_trials", type=int, default=10000)
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--y1_target", type=str, default="mirana wifie overliking")
