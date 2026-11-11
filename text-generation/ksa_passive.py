@@ -179,7 +179,7 @@ def main():
     parser.add_argument("--num_exemplars", type=int, nargs="+", default=[8],
                         help="J values; several run a J sweep (needs --fixed_context) with a "
                              "Bonferroni-split confidence 1-0.05/len(J)")
-    parser.add_argument("--n_trials", type=int, default=20000)
+    parser.add_argument("--n_trials", type=int, default=50000)
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--output_dir", type=str, default="results_ksa_passive")
