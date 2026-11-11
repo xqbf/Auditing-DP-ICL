@@ -174,7 +174,7 @@ def main():
     parser.add_argument("--num_exemplars", type=int, nargs="+", default=[1],
                         help="J values (number of experts) to audit; with several J, each uses "
                              "a Bonferroni-split confidence 1-0.05/len(J) and the best over J is reported")
-    parser.add_argument("--n_trials", type=int, default=10000)
+    parser.add_argument("--n_trials", type=int, default=50000)
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1.0, 2.0, 4.0, 8.0, 16.0])
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--gamma", type=float, default=4.5, help="Log-prob clipping bound")
